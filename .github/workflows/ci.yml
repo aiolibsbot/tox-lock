@@ -1,0 +1,79 @@
+---
+
+name: 🧪 CI
+
+on:  # yamllint disable-line rule:truthy
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FORCE_COLOR: 1
+
+jobs:
+
+  test:
+    name: 🐍 ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.13'
+        - '3.12'
+        - '3.11'
+        - '3.10'
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        # NOTE: `setuptools-scm` needs the tags to derive a version.
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.30.0'
+
+    - name: Run the test suite
+      run: python -Im tox run -e py
+
+  dists:
+    name: 📦 Build & check dists
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.30.0'
+
+    - name: Build the dists and validate their metadata
+      run: python -Im tox run -e build-dists,metadata-validation
+
+    # NOTE: The plugin is a PEP 420 namespace subpackage, easy to leave out
+    # NOTE: of a dist by accident. Installing from the built sdist -- never
+    # NOTE: the work tree -- is what catches that.
+    - name: Verify the sdist actually ships an importable plugin
+      run: |
+        set -euxo pipefail
+        python -Im venv "${RUNNER_TEMP}/sdist-venv"
+        "${RUNNER_TEMP}/sdist-venv/bin/python" -Im pip install \
+          --upgrade --no-binary tox-lock dist/*.tar.gz
+        "${RUNNER_TEMP}/sdist-venv/bin/python" -Ic \
+          'import tox_plugins.lock._plugin as p; print(p.__file__)'
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dists
+        path: dist/
+
+...
