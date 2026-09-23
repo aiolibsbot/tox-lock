@@ -871,3 +871,78 @@ def test_lock_python_does_not_leak_across_the_seeded_envs(
     )
     tox_invocation_result.assert_success()
     assert 'base_python = py311' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'label'),
+    (
+        pytest.param({'tox.ini': '[tox]\n'}, 'lock', id='ini-default'),
+        pytest.param(
+            {'tox.toml': 'env_list = []\n'},
+            'lock',
+            id='toml-default',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            'lock',
+            id='core-less-config',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_labels = pins\n'},
+            'pins',
+            id='ini-configured',
+        ),
+        pytest.param(
+            {'tox.toml': 'lock_labels = ["pins"]\n'},
+            'pins',
+            id='toml-configured',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_labels = {env:LOCK_LABEL:pins}\n'},
+            'pins',
+            id='substitutions-are-expanded',
+        ),
+    ),
+)
+def test_both_envs_answer_to_one_label(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    label: str,
+) -> None:
+    """Selecting the label runs the plugin's envs and nothing else.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param label: The label the envs are expected to answer to.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run('list', '--no-desc', '-m', label)
+    tox_invocation_result.assert_success()
+    assert tox_invocation_result.out.split() == ['lock-deps', 'lock-deps-check']
+
+
+def test_lock_labels_can_be_emptied(tox_project: ToxProjectCreator) -> None:
+    """A project wanting no label at all says so by emptying the key.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\nlock_labels =\n'})
+    tox_invocation_result = project.run('list', '--no-desc', '-m', 'lock')
+    tox_invocation_result.assert_success()
+    assert 'lock-deps' not in tox_invocation_result.out
+
+
+def test_lock_labels_are_overridable_per_env(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Labelling one env by hand leaves the other one as seeded.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\n[testenv:lock-deps]\nlabels = write\n',
+    })
+    tox_invocation_result = project.run('list', '--no-desc', '-m', 'lock')
+    tox_invocation_result.assert_success()
+    assert tox_invocation_result.out.split() == ['lock-deps-check']

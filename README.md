@@ -67,6 +67,13 @@ loud:
 $ tox run -q -e lock-deps-check
 ```
 
+Both envs answer to the `lock` label, so CI asks for the plugin's
+contribution by name rather than by enumeration:
+
+```console
+$ tox run -q -m lock
+```
+
 It recompiles the same sources with the same options into a scratch
 file under the tox temp dir, compares the result against your lock,
 and exits non-zero if they differ. Your lock file is never written to,
@@ -193,13 +200,22 @@ fixes both at once:
 lock_python = py312
 ```
 
-Substitutions work in all five, as in any other core setting -- for
+The label both envs answer to is settable too -- renamed to fit a
+project's existing scheme, or emptied to opt out of labelling
+altogether:
+
+```ini
+[tox]
+lock_labels = pins
+```
+
+Substitutions work in all six, as in any other core setting -- for
 instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last and so win over `lock_options`.
 
-Both envs read the same five core settings, so a project configures
+Both envs read the same six core settings, so a project configures
 its lock once and the check follows.
 
 The plugin's defaults sit between the `[testenv]` base section and

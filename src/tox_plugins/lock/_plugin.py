@@ -70,6 +70,13 @@ _DEFAULT_LOCK_UV = ('uv',)
 # NOTE: have to fight past rather than simply fill in.
 _DEFAULT_LOCK_PYTHON: tuple[str, ...] = ()
 
+# NOTE: Both envs carry the same label so that a project naming the
+# NOTE: plugin's contribution in CI -- or in `depends` -- names one
+# NOTE: thing rather than an enumeration it has to revisit every time
+# NOTE: this plugin grows an env. Labels are additive in tox, so a
+# NOTE: project already using this one keeps whatever it put there.
+_DEFAULT_LOCK_LABELS = ('lock',)
+
 # NOTE: `uv pip compile` seeds its resolution from the output file when
 # NOTE: one is already there, leaving every pin that does not have to
 # NOTE: move exactly where it is. The check recompiles into a copy of
@@ -390,6 +397,12 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the interpreter the `tox-lock` envs resolve the lock with',
     )
     core_conf.add_config(
+        'lock_labels',
+        of_type=list[str],
+        default=list(_DEFAULT_LOCK_LABELS),
+        desc='the labels the `tox-lock` envs answer to under `tox run -m`',
+    )
+    core_conf.add_config(
         'lock_options',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_OPTIONS),
@@ -406,6 +419,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     # NOTE: that is not there. Which interpreter it should be is the
     # NOTE: project's call; saying it twice, once per env, is not.
     lock_python = _seeded_base_python(core_conf)
+    lock_labels = core_conf['lock_labels']
     lock_inputs = ', '.join(_lock_inputs(core_conf))
     pos_args = _lock_args(state)
 
@@ -423,6 +437,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
             **lock_python,
+            labels=list(lock_labels),
             deps=list(lock_uv),
             commands_pre=[],
             commands=[_compile_command(core_conf, lock_file, pos_args)],
@@ -446,6 +461,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'`--`, as with `{_ENV_NAME}`.'
             ),
             **lock_python,
+            labels=list(lock_labels),
             deps=list(lock_uv),
             commands_pre=[
                 _python_script_command(
