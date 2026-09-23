@@ -54,6 +54,21 @@ _DEFAULT_LOCK_FILE = Path('requirements.txt')
 # NOTE: without also taking ownership of the rest of the command line.
 _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 
+# NOTE: `uv` records the command it was run with in a header comment at
+# NOTE: the top of every lock it writes, so that whoever finds the file
+# NOTE: later knows how to regenerate it. Left to itself it records the
+# NOTE: invocation this plugin builds -- a `python -Werror -m uv pip
+# NOTE: compile` line naming paths relative to wherever the env ran --
+# NOTE: which is precisely the command nobody should run by hand: it
+# NOTE: goes around the pinned `uv`, the passed-through index config
+# NOTE: and the settings the rest of this module exists to centralise.
+# NOTE: In the check env it is worse than useless, naming the scratch
+# NOTE: file under the tox temp dir the check compiles into and then
+# NOTE: throws away. The command that actually reproduces the lock is
+# NOTE: the env, so that is what the header is made to say.
+_CUSTOM_COMPILE_COMMAND_OPTION = '--custom-compile-command'
+_DEFAULT_CUSTOM_COMPILE_COMMAND = f'tox run -e {_ENV_NAME}'
+
 # NOTE: Both envs install `uv` from the same setting on purpose. The
 # NOTE: resolver is part of the lock's inputs as much as the sources
 # NOTE: are -- two `uv` releases can pin the same requirements
@@ -307,6 +322,41 @@ def _python_script_command(script: str, *args: str) -> Command:
     return Command([*_PYTHON_CLI_OPTIONS, '-c', script, *args])
 
 
+def _names_option(args: _c.Iterable[str], option: str) -> bool:
+    """Tell whether an option appears among the given arguments.
+
+    Both spellings a user may reach for are recognised: the option and
+    its value as two arguments, and the two glued with an ``=``.
+
+    :param args: The command arguments to look through.
+    :param option: The long option to look for, leading dashes included.
+    :returns: :data:`True` if the option is named, :data:`False` if not.
+    """
+    return any(
+        arg == option or arg.startswith(f'{option}=')
+        for arg in args
+    )
+
+
+def _custom_compile_command(user_args: _c.Sequence[str]) -> tuple[str, ...]:
+    """Render the header comment seeded into the compiled lock.
+
+    The seed steps aside entirely when the user names the option
+    themselves, anywhere. ``uv`` refuses a repeated
+    ``--custom-compile-command`` outright rather than taking the last
+    one, so a default appended alongside a user's own would not lose
+    quietly -- it would fail the run, which is the one thing a default
+    must never do to a project that configured its way past it.
+
+    :param user_args: The arguments the user contributed, in full.
+    :returns: The option and its value, or nothing at all.
+    """
+    if _names_option(user_args, _CUSTOM_COMPILE_COMMAND_OPTION):
+        return ()
+
+    return (_CUSTOM_COMPILE_COMMAND_OPTION, _DEFAULT_CUSTOM_COMPILE_COMMAND)
+
+
 def _compile_command(
     core_conf: ConfigSet,
     output_file: Path,
@@ -321,16 +371,30 @@ def _compile_command(
     """
     # NOTE: The user options go first so that the settings with a core
     # NOTE: key of their own -- and the arguments passed after `--` --
-    # NOTE: stay the last word on the subject. `uv` takes the last
-    # NOTE: occurrence of a repeated option, so a stray `--output-file`
-    # NOTE: in `lock_options` loses to `lock_file`, where it belongs.
+    # NOTE: come last, which is what `uv` wants for the options it lets
+    # NOTE: repeat: `--upgrade-package`, `--extra`, `--constraint` and
+    # NOTE: friends accumulate in the order they are given. The ones it
+    # NOTE: does not let repeat it rejects outright rather than taking
+    # NOTE: the last, so ordering cannot make a duplicate win and the
+    # NOTE: plugin does not pretend otherwise: it owns `--output-file`,
+    # NOTE: which is the argument that makes the check a check, and it
+    # NOTE: withdraws its own header default the moment a project names
+    # NOTE: one.
+    user_options = list(_lock_options(core_conf))
     return Command([
         *_LOCK_COMMAND_PREFIX,
-        *_lock_options(core_conf),
+        *user_options,
         '--output-file',
         str(output_file),
         *_lock_inputs(core_conf),
         *pos_args,
+        # NOTE: Trailing the user's own arguments rather than leading
+        # NOTE: them, so that everything a project wrote reads in the
+        # NOTE: order it wrote it. Nothing rides on the position: the
+        # NOTE: seed is there only when no user argument claims the
+        # NOTE: option, and would be an error rather than a loser if
+        # NOTE: one did.
+        *_custom_compile_command((*user_options, *pos_args)),
     ])
 
 

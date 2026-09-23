@@ -1097,3 +1097,99 @@ def test_pass_env_is_overridable_per_env(tox_project: ToxProjectCreator) -> None
     passed_env = tox_invocation_result.out.split()
     assert 'OTHER_TOKEN' in passed_env
     assert 'MY_INDEX_TOKEN' not in passed_env
+
+
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_lock_header_names_the_env_that_reproduces_it(
+    tox_project: ToxProjectCreator,
+    env_name: str,
+) -> None:
+    """Both envs stamp the lock with a command a reader can run.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param env_name: The seeded env whose command is inspected.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert (
+        "--custom-compile-command 'tox run -e lock-deps'"
+        in tox_invocation_result.out
+    )
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'extra_args', 'expected_command'),
+    (
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_options = --custom-compile-command "make lock"\n'
+                ),
+            },
+            (),
+            'make lock',
+            id='named-in-lock-options',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_options = --custom-compile-command=make\n'
+                ),
+            },
+            (),
+            '--custom-compile-command=make',
+            id='named-in-lock-options-glued-to-its-value',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('--', '--custom-compile-command', 'make lock'),
+            'make lock',
+            id='named-in-posargs',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_a_configured_lock_header_replaces_the_seeded_one(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    extra_args: tuple[str, ...],
+    expected_command: str,
+    env_name: str,
+) -> None:
+    """The seeded header withdraws rather than duplicating the option.
+
+    ``uv`` rejects a repeated ``--custom-compile-command``, so the two
+    appearing side by side would fail the run outright.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param extra_args: Extra CLI arguments to append to the ``tox`` call.
+    :param expected_command: The header command the user configured.
+    :param env_name: The seeded env whose command is inspected.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+        *extra_args,
+    )
+    tox_invocation_result.assert_success()
+    assert expected_command in tox_invocation_result.out
+    assert (
+        "--custom-compile-command 'tox run -e lock-deps'"
+        not in tox_invocation_result.out
+    )
+    assert tox_invocation_result.out.count('--custom-compile-command') == 1
