@@ -54,6 +54,15 @@ _DEFAULT_LOCK_FILE = Path('requirements.txt')
 # NOTE: without also taking ownership of the rest of the command line.
 _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 
+# NOTE: Both envs install `uv` from the same setting on purpose. The
+# NOTE: resolver is part of the lock's inputs as much as the sources
+# NOTE: are -- two `uv` releases can pin the same requirements
+# NOTE: differently -- so a check running a newer one than the machine
+# NOTE: that wrote the lock reports drift that is not there. Pinning it
+# NOTE: is the project's call; pinning it *twice*, once per env, is not
+# NOTE: something the project should have to remember.
+_DEFAULT_LOCK_UV = ('uv',)
+
 # NOTE: `uv pip compile` seeds its resolution from the output file when
 # NOTE: one is already there, leaving every pin that does not have to
 # NOTE: move exactly where it is. The check recompiles into a copy of
@@ -352,6 +361,12 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the lock file `tox-lock` compiles',
     )
     core_conf.add_config(
+        'lock_uv',
+        of_type=list[str],
+        default=list(_DEFAULT_LOCK_UV),
+        desc='the `uv` requirements the `tox-lock` envs are run with',
+    )
+    core_conf.add_config(
         'lock_options',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_OPTIONS),
@@ -359,6 +374,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     )
 
     lock_file = core_conf['lock_file']
+    lock_uv = core_conf['lock_uv']
     lock_inputs = ', '.join(_lock_inputs(core_conf))
     pos_args = _lock_args(state)
 
@@ -375,7 +391,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
-            deps=['uv'],
+            deps=list(lock_uv),
             commands_pre=[],
             commands=[_compile_command(core_conf, lock_file, pos_args)],
             commands_post=[],
@@ -397,7 +413,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'writing to it. Meant for CI; pass extra arguments after '
                 f'`--`, as with `{_ENV_NAME}`.'
             ),
-            deps=['uv'],
+            deps=list(lock_uv),
             commands_pre=[
                 _python_script_command(
                     _CHECK_SEED_SCRIPT,

@@ -693,3 +693,77 @@ def test_lock_file_is_referenceable_from_another_env(
     tox_invocation_result = project.run('config', '-e', 'use', '-k', 'deps')
     tox_invocation_result.assert_success()
     assert expected_deps in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'expected_deps'),
+    (
+        pytest.param({'tox.ini': '[tox]\n'}, 'uv', id='defaults-to-uv'),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_uv = uv == 0.9.2\n'},
+            'uv == 0.9.2',
+            id='ini-pinned',
+        ),
+        pytest.param(
+            {'tox.toml': 'lock_uv = ["uv == 0.9.2"]\n'},
+            'uv == 0.9.2',
+            id='toml-pinned',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_uv = uv == {env:UV_PIN:0.9.3}\n'},
+            'uv == 0.9.3',
+            id='substitutions-are-expanded',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            'uv',
+            id='core-less-config-falls-back-to-the-default',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_lock_uv_is_configurable_for_both_envs(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    expected_deps: str,
+    env_name: str,
+) -> None:
+    """One core setting pins the ``uv`` both envs are run with.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param expected_deps: The dependency the env must end up with.
+    :param env_name: The seeded env whose ``deps`` are inspected.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'deps',
+    )
+    tox_invocation_result.assert_success()
+    assert f'deps = {expected_deps}' in tox_invocation_result.out
+
+
+def test_lock_uv_does_not_leak_across_the_seeded_envs(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Overriding one env's ``uv`` leaves the other one alone.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\nlock_uv = uv == 0.9.2\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'deps',
+        '-x',
+        'testenv:lock-deps.deps=uv==0.9.4',
+    )
+    tox_invocation_result.assert_success()
+    assert 'deps = uv==0.9.4' in tox_invocation_result.out

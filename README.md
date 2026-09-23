@@ -170,13 +170,24 @@ lock_options =
   --custom-compile-command "tox run -e lock-deps"
 ```
 
-Substitutions work in all three, as in any other core setting -- for
+The resolver itself is an input to the lock as much as the sources
+are: two `uv` releases can pin the same requirements differently, and
+a check running a newer `uv` than the machine that wrote the lock
+reports drift that is not there. Projects that would rather decide
+when that happens pin it once, for both envs:
+
+```ini
+[tox]
+lock_uv = uv == 0.9.2
+```
+
+Substitutions work in all four, as in any other core setting -- for
 instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last and so win over `lock_options`.
 
-Both envs read the same three core settings, so a project configures
+Both envs read the same four core settings, so a project configures
 its lock once and the check follows.
 
 The plugin's defaults sit between the `[testenv]` base section and
