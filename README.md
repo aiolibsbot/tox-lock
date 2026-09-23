@@ -56,6 +56,20 @@ $ tox run -q -e lock-deps -- --python 3.10    # lock for a specific interpreter
 The lock is hash-pinned (`--generate-hashes`) and written whole on
 every run, so there is no stale-artifact cleanup step to remember.
 
+By default the lock is compiled out of `pyproject.toml` into
+`requirements.txt`, both relative to the tox root. Projects that keep
+theirs elsewhere say so in the core section rather than restating the
+whole command:
+
+```ini
+[tox]
+lock_input = requirements/base.in
+lock_file = requirements/base.txt
+```
+
+Substitutions work there, as in any other core setting -- for
+instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
+
 The plugin's defaults sit between the `[testenv]` base section and
 your own env section: `[testenv]` settings never leak into this env,
 while anything set in `[testenv:lock-deps]` (`[env.lock-deps]` in

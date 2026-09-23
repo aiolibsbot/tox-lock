@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import typing as _t
+from pathlib import Path
 
 from tox.config.loader.memory import MemoryLoader
 from tox.config.loader.replacer import ReplaceReference, replace
@@ -30,9 +31,6 @@ _PYTHON_CLI_OPTIONS = (
     '-Werror',
 )
 
-# NOTE: `MemoryLoader` values are not subjected to substitutions, so the
-# NOTE: paths are relative to `change_dir` that defaults to the tox root --
-# NOTE: the same place the input `pyproject.toml` is read from.
 _LOCK_COMMAND_PREFIX = (
     *_PYTHON_CLI_OPTIONS,
     '-m',
@@ -40,10 +38,13 @@ _LOCK_COMMAND_PREFIX = (
     'pip',
     'compile',
     '--generate-hashes',
-    '--output-file',
-    'requirements.txt',
-    'pyproject.toml',
 )
+
+# NOTE: Both defaults are relative, and stay relative: the lock env runs
+# NOTE: in `change_dir`, which defaults to the tox root -- the same place
+# NOTE: the config file naming them is read from.
+_DEFAULT_LOCK_INPUT = Path('pyproject.toml')
+_DEFAULT_LOCK_FILE = Path('requirements.txt')
 
 
 class _NoSectionReference(ReplaceReference):
@@ -185,16 +186,40 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
 
 
 @impl
-def tox_add_core_config(
-    core_conf: ConfigSet,  # noqa: ARG001  # pylint: disable=unused-argument
-    state: State,
-) -> None:
+def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     """Inject default configuration for the locking environment.
 
-    :param core_conf: The core tox configuration set (unused).
+    The two file names the lock command is built around are settable
+    from the ``[tox]`` core section, so that a project keeping its lock
+    somewhere other than ``./requirements.txt`` -- or compiling one out
+    of a ``requirements.in`` rather than ``pyproject.toml`` -- does not
+    have to restate the whole command to say so. Being core config, both
+    are read through the config file's own loader, so ``{tox_root}`` and
+    friends expand in them.
+
+    :param core_conf: The core tox configuration set to read from.
     :param state: The tox session state to inject the environment into.
     """
-    lock_cmd = Command([*_LOCK_COMMAND_PREFIX, *_lock_args(state)])
+    core_conf.add_config(
+        'lock_input',
+        of_type=Path,
+        default=_DEFAULT_LOCK_INPUT,
+        desc='the requirements source `tox-lock` compiles the lock from',
+    )
+    core_conf.add_config(
+        'lock_file',
+        of_type=Path,
+        default=_DEFAULT_LOCK_FILE,
+        desc='the lock file `tox-lock` compiles, hash-pinned',
+    )
+
+    lock_cmd = Command([
+        *_LOCK_COMMAND_PREFIX,
+        '--output-file',
+        str(core_conf['lock_file']),
+        str(core_conf['lock_input']),
+        *_lock_args(state),
+    ])
 
     # NOTE: There is no cleanup counterpart env here on purpose: `uv pip
     # NOTE: compile` writes the output file whole, so a stale lock can
@@ -203,10 +228,11 @@ def tox_add_core_config(
         _SeedLoader(
             base=[],
             description=(
-                '[tox-lock] Compile a hash-pinned requirements.txt from '
-                'pyproject.toml; pass extra `uv pip compile` arguments '
-                'after `--`. For example, '
-                '`tox run -e lock-deps -- --upgrade`.'
+                f'[tox-lock] Compile the hash-pinned '
+                f'{core_conf["lock_file"]} out of '
+                f'{core_conf["lock_input"]}; pass extra `uv pip compile` '
+                f'arguments after `--`. For example, '
+                f'`tox run -e lock-deps -- --upgrade`.'
             ),
             deps=['uv'],
             commands_pre=[],

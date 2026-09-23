@@ -229,3 +229,104 @@ def test_posargs_reach_the_command_verbatim(
     )
     tox_invocation_result.assert_success()
     assert "'out\\#1.txt'" in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'expected_present'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('--output-file requirements.txt pyproject.toml',),
+            id='ini-defaults',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_file = requirements/base.txt\n'
+                    'lock_input = requirements/base.in\n'
+                ),
+            },
+            ('--output-file requirements/base.txt requirements/base.in',),
+            id='ini-custom-paths',
+        ),
+        pytest.param(
+            {
+                'tox.toml': (
+                    'lock_file = "constraints.txt"\n'
+                    'lock_input = "setup.cfg"\n'
+                ),
+            },
+            ('--output-file constraints.txt setup.cfg',),
+            id='toml-custom-paths',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            ('--output-file requirements.txt pyproject.toml',),
+            id='core-less-config-falls-back-to-the-defaults',
+        ),
+    ),
+)
+def test_lock_paths_are_configurable(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    expected_present: tuple[str, ...],
+    subtests: SubTests,
+) -> None:
+    """The core section names the files the lock command works on.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param expected_present: Substrings that must appear in the output.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+        'description',
+    )
+    tox_invocation_result.assert_success()
+    for substring in expected_present:
+        with subtests.test(msg=substring):
+            assert substring in tox_invocation_result.out
+
+
+def test_lock_paths_expand_substitutions(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """A core-section path gets the config file's own substitutions.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\nlock_file = {env:LOCK_OUT:pinned.txt}\n',
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert '--output-file pinned.txt' in tox_invocation_result.out
+
+
+def test_lock_paths_are_shown_in_the_env_description(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """``tox list`` tells the user which lock file the env writes.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\nlock_file = constraints.txt\n',
+    })
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+    assert 'constraints.txt' in tox_invocation_result.out
