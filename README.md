@@ -67,8 +67,32 @@ lock_input = requirements/base.in
 lock_file = requirements/base.txt
 ```
 
-Substitutions work there, as in any other core setting -- for
+The options `uv pip compile` is invoked with are settable the same
+way. They default to `--generate-hashes`; a project that cannot pin
+hashes -- one depending on a direct URL or an editable checkout --
+opts out by emptying the setting rather than by rewriting the command:
+
+```ini
+[tox]
+lock_options =
+```
+
+...and one wanting more of them lists them, one per line, value
+included:
+
+```ini
+[tox]
+lock_options =
+  --generate-hashes
+  --universal
+  --custom-compile-command "tox run -e lock-deps"
+```
+
+Substitutions work in all three, as in any other core setting -- for
 instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
+
+One-off options do not need a config change at all -- pass them after
+`--`, where they are appended last and so win over `lock_options`.
 
 The plugin's defaults sit between the `[testenv]` base section and
 your own env section: `[testenv]` settings never leak into this env,

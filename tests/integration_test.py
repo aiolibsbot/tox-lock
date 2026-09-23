@@ -330,3 +330,133 @@ def test_lock_paths_are_shown_in_the_env_description(
     tox_invocation_result = project.run('list')
     tox_invocation_result.assert_success()
     assert 'constraints.txt' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'expected_present', 'expected_absent'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('compile --generate-hashes --output-file',),
+            (),
+            id='defaults-to-hash-pinning',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options =\n'},
+            ('compile --output-file',),
+            ('--generate-hashes',),
+            id='ini-empty-opts-out-of-hashes',
+        ),
+        pytest.param(
+            {'tox.toml': 'lock_options = []\n'},
+            ('compile --output-file',),
+            ('--generate-hashes',),
+            id='toml-empty-opts-out-of-hashes',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_options =\n'
+                    '  --generate-hashes\n'
+                    '  --universal\n'
+                ),
+            },
+            ('compile --generate-hashes --universal --output-file',),
+            (),
+            id='ini-several-options',
+        ),
+        pytest.param(
+            {
+                'tox.toml': (
+                    'lock_options = ["--python-version 3.10", "--no-header"]\n'
+                ),
+            },
+            ('compile --python-version 3.10 --no-header --output-file',),
+            (),
+            id='toml-an-option-and-its-value-are-split-apart',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = {env:LOCK_OPTS:--no-annotate}\n'},
+            ('compile --no-annotate --output-file',),
+            ('--generate-hashes',),
+            id='substitutions-are-expanded',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            ('compile --generate-hashes --output-file',),
+            (),
+            id='core-less-config-falls-back-to-the-default',
+        ),
+    ),
+)
+def test_lock_options_are_configurable(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    expected_present: tuple[str, ...],
+    expected_absent: tuple[str, ...],
+    subtests: SubTests,
+) -> None:
+    """The core section names the options the lock is compiled with.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param expected_present: Substrings that must appear in the output.
+    :param expected_absent: Substrings that must not appear in the output.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    for substring in expected_present:
+        with subtests.test(msg=f'present: {substring}'):
+            assert substring in tox_invocation_result.out
+    for substring in expected_absent:
+        with subtests.test(msg=f'absent: {substring}'):
+            assert substring not in tox_invocation_result.out
+
+
+def test_lock_options_are_shown_in_the_env_description(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """``tox list`` tells the user how the lock will be compiled.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\nlock_options = --universal\n',
+    })
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+    assert 'uv pip compile --universal' in tox_invocation_result.out
+
+
+def test_lock_options_reach_the_command_verbatim(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """A quoted option value keeps the spaces it was quoted for.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_options = --custom-compile-command "make lock"\n'
+        ),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert "--custom-compile-command 'make lock'" in tox_invocation_result.out

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import typing as _t
 from pathlib import Path
 
@@ -37,7 +38,6 @@ _LOCK_COMMAND_PREFIX = (
     'uv',
     'pip',
     'compile',
-    '--generate-hashes',
 )
 
 # NOTE: Both defaults are relative, and stay relative: the lock env runs
@@ -45,6 +45,12 @@ _LOCK_COMMAND_PREFIX = (
 # NOTE: the config file naming them is read from.
 _DEFAULT_LOCK_INPUT = Path('pyproject.toml')
 _DEFAULT_LOCK_FILE = Path('requirements.txt')
+
+# NOTE: Hash pinning is a default rather than a fixture of the command:
+# NOTE: a project depending on a direct URL or an editable checkout
+# NOTE: cannot generate hashes at all, and is entitled to say so
+# NOTE: without also taking ownership of the rest of the command line.
+_DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 
 
 class _NoSectionReference(ReplaceReference):
@@ -122,6 +128,22 @@ class _SeedLoader(MemoryLoader):
         # NOTE: reference to a config section comes back verbatim,
         # NOTE: which is what tox does with one it cannot resolve.
         return replace(conf, _NoSectionReference(), value, args)
+
+
+def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
+    """Split the configured lock options into command arguments.
+
+    ``tox`` hands back a list holding one entry per line the user wrote,
+    so an option and the value it takes -- ``--python-version 3.9`` --
+    arrive glued into a single string. Passing that on unsplit would
+    hand ``uv`` one argument it has never heard of, so each entry is
+    parsed the way a shell would parse it; quoting works accordingly.
+
+    :param core_conf: The core tox configuration set to read from.
+    :yields: The lock options, one command argument at a time.
+    """
+    for option in core_conf['lock_options']:
+        yield from shlex.split(option)
 
 
 def _lock_args(state: State) -> tuple[str, ...]:
@@ -210,11 +232,23 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         'lock_file',
         of_type=Path,
         default=_DEFAULT_LOCK_FILE,
-        desc='the lock file `tox-lock` compiles, hash-pinned',
+        desc='the lock file `tox-lock` compiles',
+    )
+    core_conf.add_config(
+        'lock_options',
+        of_type=list[str],
+        default=list(_DEFAULT_LOCK_OPTIONS),
+        desc='the `uv pip compile` options `tox-lock` locks with',
     )
 
+    # NOTE: The user options go first so that the settings with a core
+    # NOTE: key of their own -- and the arguments passed after `--` --
+    # NOTE: stay the last word on the subject. `uv` takes the last
+    # NOTE: occurrence of a repeated option, so a stray `--output-file`
+    # NOTE: in `lock_options` loses to `lock_file`, where it belongs.
     lock_cmd = Command([
         *_LOCK_COMMAND_PREFIX,
+        *_lock_options(core_conf),
         '--output-file',
         str(core_conf['lock_file']),
         str(core_conf['lock_input']),
@@ -228,9 +262,9 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Compile the hash-pinned '
-                f'{core_conf["lock_file"]} out of '
-                f'{core_conf["lock_input"]}; pass extra `uv pip compile` '
+                f'[tox-lock] Compile {core_conf["lock_file"]} out of '
+                f'{core_conf["lock_input"]} using `uv pip compile '
+                f'{" ".join(_lock_options(core_conf))}`; pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e lock-deps -- --upgrade`.'
             ),
