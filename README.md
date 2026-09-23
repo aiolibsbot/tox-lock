@@ -77,6 +77,19 @@ The comparison ignores comment lines, `uv`'s header among them: it
 names the command that produced the file, `--output-file` included,
 which is the one argument the check is obliged to change.
 
+A failing check prints a unified diff of the pins that moved, so the
+CI log that reports the staleness also says what it consists of:
+
+```diff
+--- requirements.txt (locked)
++++ requirements.txt (recompiled)
+@@ -1,2 +1,3 @@
+-attrs==24.2.0
++attrs==25.1.0
+ idna==3.10
++sniffio==1.3.1
+```
+
 The recompile starts from a copy of the current lock, so the check
 reports *drift* -- your lock no longer matching the sources it claims
 to come from -- rather than the mere existence of a newer release

@@ -77,8 +77,16 @@ if lock_file.is_file():
 # NOTE: argument the check is obliged to change. The `# via ...`
 # NOTE: annotations trailing each pin go the same way; they restate the
 # NOTE: dependency graph the pins themselves encode.
+#
+# NOTE: The diff is printed over the same filtered lines rather than
+# NOTE: over the files, so that what a reader is shown is exactly what
+# NOTE: was compared -- a diff full of header and `# via` noise would
+# NOTE: invite the conclusion that the check is tripping over comments
+# NOTE: it in fact ignores. CI is usually the only place this ever
+# NOTE: runs, and a log saying nothing but "out of date" sends whoever
+# NOTE: reads it to recompile locally just to find out what moved.
 _CHECK_COMPARE_SCRIPT = """
-import pathlib, sys
+import difflib, pathlib, sys
 
 
 def pins(path):
@@ -91,8 +99,20 @@ def pins(path):
 scratch_file, lock_file = map(pathlib.Path, sys.argv[1:])
 if not lock_file.is_file():
     sys.exit(f'{lock_file} does not exist -- run `tox run -e lock-deps`.')
-if pins(scratch_file) != pins(lock_file):
-    sys.exit(f'{lock_file} is out of date -- run `tox run -e lock-deps`.')
+
+locked, compiled = pins(lock_file), pins(scratch_file)
+if locked == compiled:
+    sys.exit(0)
+
+for diff_line in difflib.unified_diff(
+        locked,
+        compiled,
+        fromfile=f'{lock_file} (locked)',
+        tofile=f'{lock_file} (recompiled)',
+        lineterm='',
+):
+    print(diff_line, file=sys.stderr)
+sys.exit(f'{lock_file} is out of date -- run `tox run -e lock-deps`.')
 """
 
 

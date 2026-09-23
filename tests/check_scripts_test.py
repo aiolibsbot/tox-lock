@@ -136,3 +136,30 @@ def test_compare_fails_when_there_is_no_lock_to_compare(
     assert compare_result.returncode
     assert 'does not exist' in compare_result.stderr
     assert 'Traceback' not in compare_result.stderr
+
+
+def test_compare_shows_which_pins_moved(tmp_path: Path) -> None:
+    """A failing check names the drift instead of merely asserting it.
+
+    :param tmp_path: Pytest's temporary directory fixture.
+    """
+    scratch_file = tmp_path / 'scratch.txt'
+    scratch_file.write_text(
+        '# uv pip compile -o scratch.txt\nattrs==2.0\nidna==3.0\n',
+        encoding='utf-8',
+    )
+    lock_file = tmp_path / 'requirements.txt'
+    lock_file.write_text(
+        '# uv pip compile -o requirements.txt\nattrs==1.0\n',
+        encoding='utf-8',
+    )
+
+    compare_result = _run(_CHECK_COMPARE_SCRIPT, scratch_file, lock_file)
+
+    assert compare_result.returncode
+    assert '-attrs==1.0' in compare_result.stderr
+    assert '+attrs==2.0' in compare_result.stderr
+    assert '+idna==3.0' in compare_result.stderr
+    # NOTE: The diff covers what was compared -- the pins -- so the
+    # NOTE: headers the check deliberately ignores stay out of it.
+    assert 'uv pip compile' not in compare_result.stderr
