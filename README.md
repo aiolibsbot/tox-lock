@@ -59,9 +59,9 @@ every run, so there is no stale-artifact cleanup step to remember.
 The plugin's defaults sit between the `[testenv]` base section and
 your own env section: `[testenv]` settings never leak into this env,
 while anything set in `[testenv:lock-deps]` (`[env.lock-deps]` in
-`tox.toml`) wins, as does `-x testenv:lock-deps.<key>=...` once that
-section exists (tox drops `-x` overrides for sections absent from the
-config). Keys left unset keep the plugin's defaults:
+`tox.toml`) wins, as does `-x testenv:lock-deps.<key>=...` -- whether
+or not the project declares that section at all. Keys left unset keep
+the plugin's defaults:
 
 ```ini
 [testenv:lock-deps]

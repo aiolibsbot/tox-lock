@@ -128,6 +128,41 @@ def test_env_config(
             (),
             id='ini-cli-override-wins',
         ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('-x', 'testenv:lock-deps.deps=uv<99'),
+            ('deps = uv<99',),
+            (),
+            id='ini-cli-override-wins-without-a-section',
+        ),
+        pytest.param(
+            {'tox.toml': '[env_run_base]\n'},
+            ('-x', 'env.lock-deps.deps=uv<99'),
+            ('deps = uv<99',),
+            (),
+            id='toml-cli-override-wins-without-a-table',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('-x', 'testenv:lock-deps.deps={env:LOCK_PIN:uv<98}'),
+            ('deps = uv<98',),
+            (),
+            id='cli-override-substitutions-are-expanded',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            ('-x', 'testenv:lock-deps.deps={env:LOCK_PIN:uv<97}'),
+            ('deps = uv<97',),
+            (),
+            id='core-less-config-still-expands-an-override',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            ('-x', 'testenv:lock-deps.deps={[testenv]deps}'),
+            ('deps = {[testenv]deps}',),
+            (),
+            id='core-less-config-leaves-a-section-reference-alone',
+        ),
     ),
 )
 def test_user_config_precedence(
@@ -166,3 +201,31 @@ def test_user_config_precedence(
     for substring in expected_absent:
         with subtests.test(msg=f'absent: {substring}'):
             assert substring not in tox_invocation_result.out
+
+
+def test_posargs_reach_the_command_verbatim(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """An escaped comment character survives into the lock command.
+
+    Seeding a :class:`~tox.config.types.Command` rather than a shell
+    string keeps the arguments exactly as typed. A string would be
+    re-split by ``StrConvert.to_command()``, which rewrites ``\\#`` into
+    ``#`` -- silently pointing ``--output-file`` at a different file
+    than the one the user named.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+        '--',
+        '--output-file',
+        'out\\#1.txt',
+    )
+    tox_invocation_result.assert_success()
+    assert "'out\\#1.txt'" in tox_invocation_result.out
