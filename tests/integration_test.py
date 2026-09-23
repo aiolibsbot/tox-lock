@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import typing as _t
 
 import pytest
@@ -767,3 +768,106 @@ def test_lock_uv_does_not_leak_across_the_seeded_envs(
     )
     tox_invocation_result.assert_success()
     assert 'deps = uv==0.9.4' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'expected_base_python'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_python = py312\n'},
+            'py312',
+            id='ini-pinned',
+        ),
+        pytest.param(
+            {'tox.toml': 'lock_python = ["py312"]\n'},
+            'py312',
+            id='toml-pinned',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_python = py3{env:PY_MINOR:12}\n'},
+            'py312',
+            id='substitutions-are-expanded',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_lock_python_is_configurable_for_both_envs(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    expected_base_python: str,
+    env_name: str,
+) -> None:
+    """One core setting names the interpreter both envs resolve under.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param expected_base_python: The interpreter the env must end up with.
+    :param env_name: The seeded env whose ``base_python`` is inspected.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'base_python',
+    )
+    tox_invocation_result.assert_success()
+    assert f'base_python = {expected_base_python}' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    'config_files',
+    (
+        pytest.param({'tox.ini': '[tox]\n'}, id='core-section'),
+        pytest.param(
+            {'tox.ini': '[testenv]\ncommands = pytest\n'},
+            id='core-less-config',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_unset_lock_python_leaves_the_tox_default_alone(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    env_name: str,
+) -> None:
+    """An unconfigured interpreter is tox's own, not a seeded guess.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param env_name: The seeded env whose ``base_python`` is inspected.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'base_python',
+    )
+    tox_invocation_result.assert_success()
+    assert f'base_python = {sys.executable}' in tox_invocation_result.out
+
+
+def test_lock_python_does_not_leak_across_the_seeded_envs(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Overriding one env's interpreter leaves the other one alone.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\nlock_python = py312\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'base_python',
+        '-x',
+        'testenv:lock-deps.base_python=py311',
+    )
+    tox_invocation_result.assert_success()
+    assert 'base_python = py311' in tox_invocation_result.out

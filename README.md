@@ -181,13 +181,25 @@ when that happens pin it once, for both envs:
 lock_uv = uv == 0.9.2
 ```
 
-Substitutions work in all four, as in any other core setting -- for
+The interpreter is an input of the same kind. `uv pip compile`
+resolves for the Python it runs under, so the same sources compiled on
+3.11 and on 3.13 legitimately differ, and a check run under one while
+the lock was written under the other reports drift that is not there.
+Left unset, both envs use whichever Python is running `tox`; naming it
+fixes both at once:
+
+```ini
+[tox]
+lock_python = py312
+```
+
+Substitutions work in all five, as in any other core setting -- for
 instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last and so win over `lock_options`.
 
-Both envs read the same four core settings, so a project configures
+Both envs read the same five core settings, so a project configures
 its lock once and the check follows.
 
 The plugin's defaults sit between the `[testenv]` base section and

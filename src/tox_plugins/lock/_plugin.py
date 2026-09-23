@@ -63,6 +63,13 @@ _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 # NOTE: something the project should have to remember.
 _DEFAULT_LOCK_UV = ('uv',)
 
+# NOTE: Empty rather than a spelling of "whatever runs tox", which is
+# NOTE: what tox falls back to on its own when the key is left unseeded.
+# NOTE: Naming that fallback here would mean seeding `base_python` on
+# NOTE: every project, and a seeded key is one the env section and `-x`
+# NOTE: have to fight past rather than simply fill in.
+_DEFAULT_LOCK_PYTHON: tuple[str, ...] = ()
+
 # NOTE: `uv pip compile` seeds its resolution from the output file when
 # NOTE: one is already there, leaving every pin that does not have to
 # NOTE: move exactly where it is. The check recompiles into a copy of
@@ -235,6 +242,16 @@ def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
         yield from shlex.split(option)
 
 
+def _seeded_base_python(core_conf: ConfigSet) -> dict[str, list[str]]:
+    """Render the configured lock interpreter as a seeded env setting.
+
+    :param core_conf: The core tox configuration set to read from.
+    :returns: The ``base_python`` seed, empty when none was configured.
+    """
+    lock_python = core_conf['lock_python']
+    return {'base_python': list(lock_python)} if lock_python else {}
+
+
 def _lock_args(state: State) -> tuple[str, ...]:
     """Read the arguments the lock command was handed after ``--``.
 
@@ -367,6 +384,12 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the `uv` requirements the `tox-lock` envs are run with',
     )
     core_conf.add_config(
+        'lock_python',
+        of_type=list[str],
+        default=list(_DEFAULT_LOCK_PYTHON),
+        desc='the interpreter the `tox-lock` envs resolve the lock with',
+    )
+    core_conf.add_config(
         'lock_options',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_OPTIONS),
@@ -375,6 +398,14 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
 
     lock_file = core_conf['lock_file']
     lock_uv = core_conf['lock_uv']
+    # NOTE: The interpreter is an input to the lock in the same way the
+    # NOTE: resolver is: `uv pip compile` resolves for the Python it runs
+    # NOTE: under unless told otherwise, so the same sources compiled on
+    # NOTE: 3.11 and on 3.13 legitimately differ -- and a check running
+    # NOTE: one while the lock was written by the other reports drift
+    # NOTE: that is not there. Which interpreter it should be is the
+    # NOTE: project's call; saying it twice, once per env, is not.
+    lock_python = _seeded_base_python(core_conf)
     lock_inputs = ', '.join(_lock_inputs(core_conf))
     pos_args = _lock_args(state)
 
@@ -391,6 +422,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
+            **lock_python,
             deps=list(lock_uv),
             commands_pre=[],
             commands=[_compile_command(core_conf, lock_file, pos_args)],
@@ -413,6 +445,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'writing to it. Meant for CI; pass extra arguments after '
                 f'`--`, as with `{_ENV_NAME}`.'
             ),
+            **lock_python,
             deps=list(lock_uv),
             commands_pre=[
                 _python_script_command(
