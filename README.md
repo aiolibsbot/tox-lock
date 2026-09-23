@@ -26,6 +26,25 @@ backed by [uv].
 [uv]: https://docs.astral.sh/uv
 
 
+## Requirements
+
+`tox >= 4.55.1`. The plugin is built on the `tox_extend_envs` hook
+(v4.30) and on core config declared as a mapping of lists (v4.31), but
+it reads `tox`'s override map through the accessor that became public in
+v4.55.1 -- which is how `-x testenv:lock-deps.deps=...` reaches an env
+nobody wrote a section for.
+
+One thing arrives later still: `tox` only began expanding the
+substitutions inside an override's *value* in v4.62.0, so
+`-x testenv:lock-deps.deps={env:LOCK_PIN}` keeps its braces under
+anything older. That is `tox`'s own behaviour for every env rather than
+this plugin's, so it is not part of the requirement above -- a project
+meets it the same way whichever env it overrides.
+
+CI runs the whole test suite against that floor, not just against
+whatever `tox` is newest, in an `oldest-tox` env that pins it.
+
+
 ## Usage
 
 Add `tox-lock` to your project's `tox` requirements -- either

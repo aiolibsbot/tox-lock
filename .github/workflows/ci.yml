@@ -35,10 +35,33 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.30.0'
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
 
     - name: Run the test suite
       run: python -Im tox run -e py
+
+  oldest-tox:
+    name: 🕰️ Oldest supported tox
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    # NOTE: The env pins the declared floor for the `tox` the suite
+    # NOTE: drives in-process -- not for the one launching it, which is
+    # NOTE: why installing an old `tox` in this step would prove
+    # NOTE: nothing.
+    - name: Run the test suite against the declared floor
+      run: python -Im tox run -e oldest-tox
 
   dists:
     name: 📦 Build & check dists
@@ -54,7 +77,7 @@ jobs:
         python-version: '3.13'
 
     - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.30.0'
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
 
     - name: Build the dists and validate their metadata
       run: python -Im tox run -e build-dists,metadata-validation

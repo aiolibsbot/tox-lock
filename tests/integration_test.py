@@ -4,14 +4,31 @@ from __future__ import annotations
 
 import sys
 import typing as _t
+from importlib.metadata import version as _installed_version
 
 import pytest
+from packaging.version import Version
 
 
 if _t.TYPE_CHECKING:
     from pytest_subtests import SubTests
 
     from tox.pytest import ToxProjectCreator
+
+
+# NOTE: ``tox`` only began expanding the substitutions in an override's
+# NOTE: value before handing it to the loader in v4.62.0. Older releases
+# NOTE: run this plugin perfectly well -- they just pass
+# NOTE: ``{env:LOCK_PIN}`` through with its braces on, as they do for
+# NOTE: every other env. That is `tox`'s behaviour rather than the
+# NOTE: plugin's, so it gates these two cases instead of the floor
+# NOTE: `pyproject.toml` declares.
+#
+# Ref: https://github.com/tox-dev/tox/pull/4048
+_substituted_overrides = pytest.mark.skipif(
+    Version(_installed_version('tox')) < Version('4.62'),
+    reason='`tox` expands the substitutions in an override since v4.62.0',
+)
 
 
 def test_lock_env_registered(tox_project: ToxProjectCreator) -> None:
@@ -148,6 +165,7 @@ def test_env_config(
             ('-x', 'testenv:lock-deps.deps={env:LOCK_PIN:uv<98}'),
             ('deps = uv<98',),
             (),
+            marks=_substituted_overrides,
             id='cli-override-substitutions-are-expanded',
         ),
         pytest.param(
@@ -155,6 +173,7 @@ def test_env_config(
             ('-x', 'testenv:lock-deps.deps={env:LOCK_PIN:uv<97}'),
             ('deps = uv<97',),
             (),
+            marks=_substituted_overrides,
             id='core-less-config-still-expands-an-override',
         ),
         pytest.param(

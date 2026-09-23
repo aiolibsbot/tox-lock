@@ -35,7 +35,33 @@ dependencies = [
   # * https://github.com/tox-dev/tox/issues/3510
   # * https://github.com/tox-dev/tox/pull/3591
   # * https://github.com/tox-dev/tox/pull/3598
-  "tox >= 4.30",
+  #
+  # NOTE: v4.31.0 is the first one to convert a builtin parametrized
+  # NOTE: generic -- `dict[Path, list[Path]]`, which the `lock_files`
+  # NOTE: core setting is declared as -- into the type it names rather
+  # NOTE: than flattening it into a list of strings.
+  #
+  # NOTE: And v4.55.1 is the first one to expose the override map as
+  # NOTE: public API. Reading it is how a `-x` override reaches an env
+  # NOTE: nobody wrote a section for, which is every project's first
+  # NOTE: encounter with this plugin, so the floor is here rather than
+  # NOTE: at 4.31: the alternative is the plugin reaching into a private
+  # NOTE: attribute for twenty-four releases' worth of users.
+  #
+  # NOTE: One thing does arrive later still -- `tox` began expanding the
+  # NOTE: substitutions in an override's value in v4.62.0, so
+  # NOTE: `-x testenv:lock-deps.deps={env:LOCK_PIN}` keeps the braces
+  # NOTE: under anything older. That is not a floor: it is `tox`'s own
+  # NOTE: behaviour for every env, this plugin's included, and a project
+  # NOTE: meets it the same way whichever env it overrides. The tests
+  # NOTE: covering it are gated on the version rather than the whole
+  # NOTE: plugin being.
+  #
+  # Refs:
+  # * https://github.com/tox-dev/tox/pull/3624
+  # * https://github.com/tox-dev/tox/pull/3951
+  # * https://github.com/tox-dev/tox/pull/4048
+  "tox >= 4.55.1",
 ]
 dynamic = [
   "version",
