@@ -70,12 +70,17 @@ _DEFAULT_LOCK_UV = ('uv',)
 # NOTE: have to fight past rather than simply fill in.
 _DEFAULT_LOCK_PYTHON: tuple[str, ...] = ()
 
-# NOTE: Both envs carry the same label so that a project naming the
-# NOTE: plugin's contribution in CI -- or in `depends` -- names one
-# NOTE: thing rather than an enumeration it has to revisit every time
-# NOTE: this plugin grows an env. Labels are additive in tox, so a
-# NOTE: project already using this one keeps whatever it put there.
+# NOTE: The two envs are labelled apart because they are alternatives,
+# NOTE: not a pipeline: one writes the lock, the other asserts that
+# NOTE: writing it would change nothing. A label naming both selects a
+# NOTE: pair whose second half is made vacuous by its first -- and
+# NOTE: under `tox run-parallel` the writer is rewriting the very file
+# NOTE: the checker is reading. Labels rather than bare env names so
+# NOTE: that a project wiring either one into CI or into `depends`
+# NOTE: names something it can rename; labels are additive in tox, so
+# NOTE: one already in use keeps whatever the project put there.
 _DEFAULT_LOCK_LABELS = ('lock',)
+_DEFAULT_CHECK_LABELS = ('lock-check',)
 
 # NOTE: `uv pip compile` seeds its resolution from the output file when
 # NOTE: one is already there, leaving every pin that does not have to
@@ -400,7 +405,13 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         'lock_labels',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_LABELS),
-        desc='the labels the `tox-lock` envs answer to under `tox run -m`',
+        desc='the labels `lock-deps` answers to under `tox run -m`',
+    )
+    core_conf.add_config(
+        'lock_check_labels',
+        of_type=list[str],
+        default=list(_DEFAULT_CHECK_LABELS),
+        desc='the labels `lock-deps-check` answers to under `tox run -m`',
     )
     core_conf.add_config(
         'lock_options',
@@ -420,6 +431,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     # NOTE: project's call; saying it twice, once per env, is not.
     lock_python = _seeded_base_python(core_conf)
     lock_labels = core_conf['lock_labels']
+    lock_check_labels = core_conf['lock_check_labels']
     lock_inputs = ', '.join(_lock_inputs(core_conf))
     pos_args = _lock_args(state)
 
@@ -461,7 +473,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'`--`, as with `{_ENV_NAME}`.'
             ),
             **lock_python,
-            labels=list(lock_labels),
+            labels=list(lock_check_labels),
             deps=list(lock_uv),
             commands_pre=[
                 _python_script_command(

@@ -67,12 +67,19 @@ loud:
 $ tox run -q -e lock-deps-check
 ```
 
-Both envs answer to the `lock` label, so CI asks for the plugin's
-contribution by name rather than by enumeration:
+Each env carries a label of its own -- `lock` and `lock-check` -- so a
+CI job or a `depends` line names something renameable rather than an
+env name it has to keep in step with this plugin:
 
 ```console
-$ tox run -q -m lock
+$ tox run -q -m lock-check
 ```
+
+The two are deliberately *not* grouped under one label: one writes the
+lock and the other asserts that writing it would change nothing, so a
+label selecting both picks a pair whose second half its first has
+already made vacuous -- and under `tox run-parallel` the writer would
+be rewriting the file the checker is reading.
 
 It recompiles the same sources with the same options into a scratch
 file under the tox temp dir, compares the result against your lock,
@@ -200,23 +207,29 @@ fixes both at once:
 lock_python = py312
 ```
 
-The label both envs answer to is settable too -- renamed to fit a
+The labels are settable too, one key per env -- renamed to fit a
 project's existing scheme, or emptied to opt out of labelling
 altogether:
 
 ```ini
 [tox]
 lock_labels = pins
+lock_check_labels = pins-audit
 ```
 
-Substitutions work in all six, as in any other core setting -- for
+They are separate keys rather than one so that a project can label the
+check for CI without labelling the writer, or the other way round. A
+project that would rather have them as one group is free to say so by
+giving both keys the same value -- that choice is just not the default.
+
+Substitutions work in all of them, as in any other core setting -- for
 instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last and so win over `lock_options`.
 
-Both envs read the same six core settings, so a project configures
-its lock once and the check follows.
+Both envs read the same settings for what the lock is made of, so a
+project configures its lock once and the check follows.
 
 The plugin's defaults sit between the `[testenv]` base section and
 your own env section: `[testenv]` settings never leak into this env,
