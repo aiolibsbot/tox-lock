@@ -648,3 +648,48 @@ def test_check_env_description_names_both_ends(
     for substring in ('constraints.txt', 'base.in', 'fail if it is not'):
         with subtests.test(msg=substring):
             assert substring in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('core_section', 'expected_deps'),
+    (
+        pytest.param(
+            '[tox]\n',
+            'deps = -r requirements.txt',
+            id='lock-file-left-at-its-default',
+        ),
+        pytest.param(
+            '[tox]\nlock_file = requirements/base.txt\n',
+            'deps = -r requirements/base.txt',
+            id='lock-file-configured',
+        ),
+    ),
+)
+def test_lock_file_is_referenceable_from_another_env(
+    core_section: str,
+    expected_deps: str,
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Other envs can install from the lock without repeating its path.
+
+    ``{[tox]lock_file}`` resolves against the core config set, so the
+    setting answers whether or not the project ever wrote it down.
+    Were it only readable once spelled out in the config file, every
+    project consuming its own lock would have to restate the default
+    just to name it -- and would then own that path twice.
+
+    :param core_section: The core section the project is configured with.
+    :param expected_deps: The dependency line the reference resolves to.
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': (
+            f'{core_section}\n'
+            '[testenv:use]\n'
+            'skip_install = true\n'
+            'deps = -r {[tox]lock_file}\n'
+        ),
+    })
+    tox_invocation_result = project.run('config', '-e', 'use', '-k', 'deps')
+    tox_invocation_result.assert_success()
+    assert expected_deps in tox_invocation_result.out

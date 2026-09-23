@@ -100,6 +100,30 @@ $ tox run -q -e lock-deps-check -- --upgrade   # would upgrading change anything
 ```
 
 
+## Using the lock
+
+Installing from the lock needs nothing from this plugin -- `tox` already
+takes a requirements file, and the path is the one you configured:
+
+```ini
+[testenv]
+deps = -r {[tox]lock_file}
+```
+
+The reference resolves whether or not the project ever wrote
+`lock_file` down, so an env installing from the default lock names it
+once, here, instead of owning `requirements.txt` in two places.
+
+An env that would rather not run against a stale lock at all says so
+the ordinary way:
+
+```ini
+[testenv]
+depends = lock-deps-check
+deps = -r {[tox]lock_file}
+```
+
+
 ## Configuration
 
 By default the lock is compiled out of `pyproject.toml` into
