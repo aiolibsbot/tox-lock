@@ -207,6 +207,22 @@ fixes both at once:
 lock_python = py312
 ```
 
+`uv` reads its own configuration -- the index to resolve against,
+how to authenticate to it, which certificates to trust -- out of the
+environment, and `tox` passes none of it through by default: its
+allowlist covers `PIP_*`, which is the wrong resolver. Both lock envs
+therefore pass `UV_*` unconditionally, so a project locking against a
+private index does not have to say so. Whatever else the index
+authenticates with is named alongside it:
+
+```ini
+[tox]
+lock_pass_env = MY_INDEX_TOKEN
+```
+
+That setting adds to `UV_*` rather than replacing it, the way
+`pass_env` adds to tox's own defaults.
+
 The labels are settable too, one key per env -- renamed to fit a
 project's existing scheme, or emptied to opt out of labelling
 altogether:

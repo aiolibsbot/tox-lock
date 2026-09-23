@@ -63,6 +63,29 @@ _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 # NOTE: something the project should have to remember.
 _DEFAULT_LOCK_UV = ('uv',)
 
+# NOTE: `uv` is configured almost entirely through the environment --
+# NOTE: `UV_INDEX`, `UV_INDEX_URL`, `UV_KEYRING_PROVIDER`, `UV_NATIVE_TLS`
+# NOTE: and friends -- and `tox` passes none of it through: its own
+# NOTE: defaults cover `PIP_*`, which is the wrong resolver. A project
+# NOTE: locking against a private index therefore resolves against PyPI
+# NOTE: instead, and either fails to find its own packages or, worse,
+# NOTE: finds public ones under the same names. Globbed rather than
+# NOTE: enumerated: `uv` gains variables release to release, and a list
+# NOTE: written out here would silently stop covering them.
+#
+# NOTE: Unconditional, and not the default of the setting below, for
+# NOTE: the same reason `PIP_*` is unconditional in tox: it is how the
+# NOTE: resolver these envs are built around is configured at all, so a
+# NOTE: project naming one more variable to pass is asking to add to
+# NOTE: this, never to trade it away. `pass_env` is merged rather than
+# NOTE: replaced by tox, so both sit alongside its defaults.
+_LOCK_PASS_ENV = ('UV_*',)
+
+# NOTE: Empty, because the variables a lock run needs beyond the
+# NOTE: resolver's own are whatever a project's index happens to
+# NOTE: authenticate with -- a token under a name nobody else uses.
+_DEFAULT_LOCK_PASS_ENV: tuple[str, ...] = ()
+
 # NOTE: Empty rather than a spelling of "whatever runs tox", which is
 # NOTE: what tox falls back to on its own when the key is left unseeded.
 # NOTE: Naming that fallback here would mean seeding `base_python` on
@@ -402,6 +425,12 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the interpreter the `tox-lock` envs resolve the lock with',
     )
     core_conf.add_config(
+        'lock_pass_env',
+        of_type=list[str],
+        default=list(_DEFAULT_LOCK_PASS_ENV),
+        desc='the extra environment variables the `tox-lock` envs pass through',
+    )
+    core_conf.add_config(
         'lock_labels',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_LABELS),
@@ -430,6 +459,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     # NOTE: that is not there. Which interpreter it should be is the
     # NOTE: project's call; saying it twice, once per env, is not.
     lock_python = _seeded_base_python(core_conf)
+    lock_pass_env = [*_LOCK_PASS_ENV, *core_conf['lock_pass_env']]
     lock_labels = core_conf['lock_labels']
     lock_check_labels = core_conf['lock_check_labels']
     lock_inputs = ', '.join(_lock_inputs(core_conf))
@@ -450,6 +480,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             ),
             **lock_python,
             labels=list(lock_labels),
+            pass_env=list(lock_pass_env),
             deps=list(lock_uv),
             commands_pre=[],
             commands=[_compile_command(core_conf, lock_file, pos_args)],
@@ -474,6 +505,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             ),
             **lock_python,
             labels=list(lock_check_labels),
+            pass_env=list(lock_pass_env),
             deps=list(lock_uv),
             commands_pre=[
                 _python_script_command(

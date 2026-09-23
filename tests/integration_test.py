@@ -1019,3 +1019,81 @@ def test_lock_labels_are_overridable_per_env(
     tox_invocation_result = project.run('list', '--no-desc', '-m', 'lock')
     tox_invocation_result.assert_success()
     assert 'lock-deps' not in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    'env_name',
+    ('lock-deps', 'lock-deps-check'),
+)
+def test_uv_environment_is_always_passed_through(
+    *,
+    tox_project: ToxProjectCreator,
+    env_name: str,
+) -> None:
+    """Both lock envs see the environment `uv` is configured with.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param env_name: The seeded env to inspect.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run('config', '-e', env_name, '-k', 'pass_env')
+    tox_invocation_result.assert_success()
+    assert 'UV_*' in tox_invocation_result.out.split()
+
+
+@pytest.mark.parametrize(
+    'config_files',
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_pass_env =\n    MY_INDEX_TOKEN\n'},
+            id='ini',
+        ),
+        pytest.param({'tox.toml': 'lock_pass_env = ["MY_INDEX_TOKEN"]\n'}, id='toml'),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_pass_env = {env:LOCK_VAR:MY_INDEX_TOKEN}\n'},
+            id='substitutions-are-expanded',
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    'env_name',
+    ('lock-deps', 'lock-deps-check'),
+)
+def test_extra_pass_env_adds_to_the_uv_environment(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    env_name: str,
+) -> None:
+    """Naming another variable to pass does not trade `UV_*` away.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param env_name: The seeded env to inspect.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run('config', '-e', env_name, '-k', 'pass_env')
+    tox_invocation_result.assert_success()
+    passed_env = tox_invocation_result.out.split()
+    assert {'UV_*', 'MY_INDEX_TOKEN'} <= set(passed_env)
+
+
+def test_pass_env_is_overridable_per_env(tox_project: ToxProjectCreator) -> None:
+    """A command-line override replaces what the plugin seeded.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\nlock_pass_env = MY_INDEX_TOKEN\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'pass_env',
+        '-x',
+        'testenv:lock-deps.pass_env=OTHER_TOKEN',
+    )
+    tox_invocation_result.assert_success()
+    passed_env = tox_invocation_result.out.split()
+    assert 'OTHER_TOKEN' in passed_env
+    assert 'MY_INDEX_TOKEN' not in passed_env
