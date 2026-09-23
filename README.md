@@ -209,6 +209,22 @@ lock_options =
   --no-annotate
 ```
 
+Every setting above is a default, and a default steps aside when a
+project names the same option for itself. `--output-file` is the one
+exception -- it is not a default but the argument that tells the two
+envs apart, the writer compiling into your lock and the check into a
+scratch file it throws away. Naming it would point the *check* at the
+real lock and have it rewrite the very file it was asked to confirm
+was already correct. So it is refused, in either spelling, wherever it
+comes from:
+
+```console
+$ tox run -q -e lock-deps-check -- -o requirements.txt
+ROOT: HandledError| `--output-file` is `tox-lock`'s to set and cannot
+come from the arguments after `--`: [...] Set the `lock_file` core
+setting instead.
+```
+
 The resolver itself is an input to the lock as much as the sources
 are: two `uv` releases can pin the same requirements differently, and
 a check running a newer `uv` than the machine that wrote the lock

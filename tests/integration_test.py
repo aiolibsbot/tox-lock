@@ -212,8 +212,8 @@ def test_posargs_reach_the_command_verbatim(
     Seeding a :class:`~tox.config.types.Command` rather than a shell
     string keeps the arguments exactly as typed. A string would be
     re-split by ``StrConvert.to_command()``, which rewrites ``\\#`` into
-    ``#`` -- silently pointing ``--output-file`` at a different file
-    than the one the user named.
+    ``#`` -- silently pointing the option at a different file than the
+    one the user named.
 
     :param tox_project: Tox-provided project factory fixture.
     """
@@ -225,7 +225,7 @@ def test_posargs_reach_the_command_verbatim(
         '-k',
         'commands',
         '--',
-        '--output-file',
+        '--constraint',
         'out\\#1.txt',
     )
     tox_invocation_result.assert_success()
@@ -1193,3 +1193,103 @@ def test_a_configured_lock_header_replaces_the_seeded_one(
         not in tox_invocation_result.out
     )
     assert tox_invocation_result.out.count('--custom-compile-command') == 1
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'extra_args', 'expected_source'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --output-file mine.txt\n'},
+            (),
+            '`lock_options`',
+            id='long-option-in-lock-options',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --output-file=mine.txt\n'},
+            (),
+            '`lock_options`',
+            id='long-option-glued-to-its-value',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = -o mine.txt\n'},
+            (),
+            '`lock_options`',
+            id='short-option-in-lock-options',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = -omine.txt\n'},
+            (),
+            '`lock_options`',
+            id='short-option-glued-to-its-value',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('--', '--output-file', 'mine.txt'),
+            'the arguments after `--`',
+            id='named-in-posargs',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_a_user_supplied_output_file_is_refused(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    extra_args: tuple[str, ...],
+    expected_source: str,
+    env_name: str,
+    subtests: SubTests,
+) -> None:
+    """Naming the output file fails with a pointer to ``lock_file``.
+
+    It is the one option the plugin refuses rather than yields: the
+    check env is a check only because its output goes somewhere else.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param extra_args: Extra CLI arguments to append to the ``tox`` call.
+    :param expected_source: The argument source the message must name.
+    :param env_name: The seeded env whose command is inspected.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+        *extra_args,
+    )
+
+    with subtests.test(msg='the run fails'):
+        assert tox_invocation_result.code != 0
+
+    for expected_text in (
+        '`--output-file`',
+        expected_source,
+        '`lock_file`',
+    ):
+        with subtests.test(msg=f'the message names {expected_text}'):
+            assert expected_text in tox_invocation_result.out
+
+
+def test_an_output_file_lookalike_option_is_left_alone(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """An option merely resembling the refused one still works.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project(
+        {'tox.ini': '[tox]\nlock_options = --no-strip-extras\n'},
+    )
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert '--no-strip-extras' in tox_invocation_result.out

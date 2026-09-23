@@ -10,6 +10,7 @@ from tox.config.loader.memory import MemoryLoader
 from tox.config.loader.replacer import ReplaceReference, replace
 from tox.config.types import Command
 from tox.plugin import impl
+from tox.report import HandledError
 
 
 if _t.TYPE_CHECKING:
@@ -66,6 +67,22 @@ _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
 # NOTE: file under the tox temp dir the check compiles into and then
 # NOTE: throws away. The command that actually reproduces the lock is
 # NOTE: the env, so that is what the header is made to say.
+# NOTE: The one option this plugin refuses rather than yields. Every
+# NOTE: other default here steps aside when a project names it -- that
+# NOTE: is what a default is -- but `--output-file` is not a default,
+# NOTE: it is the argument that tells the two envs apart: the writer
+# NOTE: compiles into the lock, the checker into a scratch file it
+# NOTE: throws away. A project naming it would point the *check* at the
+# NOTE: real lock and so have it silently rewrite the very file it was
+# NOTE: asked to confirm was already correct -- the check's one promise
+# NOTE: being that it never writes. `uv` would reject the duplicate
+# NOTE: anyway, naming an internal invocation nobody typed; refusing it
+# NOTE: here instead says which setting to reach for. Both spellings
+# NOTE: `uv` takes are covered, the short one included, whether or not
+# NOTE: the value is glued on.
+_OUTPUT_FILE_OPTION = '--output-file'
+_OUTPUT_FILE_SHORT_OPTION = '-o'
+
 _CUSTOM_COMPILE_COMMAND_OPTION = '--custom-compile-command'
 _DEFAULT_CUSTOM_COMPILE_COMMAND = f'tox run -e {_ENV_NAME}'
 
@@ -338,6 +355,44 @@ def _names_option(args: _c.Iterable[str], option: str) -> bool:
     )
 
 
+def _names_output_file(args: _c.Sequence[str]) -> bool:
+    """Tell whether the output file option appears in some arguments.
+
+    :param args: The command arguments to look through.
+    :returns: :data:`True` if the option is named, :data:`False` if not.
+    """
+    return _names_option(args, _OUTPUT_FILE_OPTION) or any(
+        arg.startswith(_OUTPUT_FILE_SHORT_OPTION) for arg in args
+    )
+
+
+def _reject_configured_output_file(
+    user_options: _c.Sequence[str],
+    pos_args: _c.Sequence[str],
+) -> None:
+    """Refuse a user-supplied output file, naming the setting for it.
+
+    :param user_options: The options read out of ``lock_options``.
+    :param pos_args: The arguments the user passed after ``--``.
+    :raises HandledError: If either of them names the output file.
+    """
+    argument_sources = (
+        (user_options, '`lock_options`'),
+        (pos_args, 'the arguments after `--`'),
+    )
+    for args, source in argument_sources:
+        if not _names_output_file(args):
+            continue
+
+        raise HandledError(
+            f'`{_OUTPUT_FILE_OPTION}` is `tox-lock`\'s to set and cannot '
+            f'come from {source}: it is what makes `{_CHECK_ENV_NAME}` a '
+            f'check rather than a second writer, and pointing it at the '
+            f'lock would have that env overwrite the very file it was '
+            f'asked to confirm. Set the `lock_file` core setting instead.',
+        )
+
+
 def _custom_compile_command(user_args: _c.Sequence[str]) -> tuple[str, ...]:
     """Render the header comment seeded into the compiled lock.
 
@@ -368,6 +423,7 @@ def _compile_command(
     :param output_file: The path the compiled lock is written to.
     :param pos_args: The arguments the user passed after ``--``.
     :returns: The command compiling the configured sources.
+    :raises HandledError: If the user named the output file themselves.
     """
     # NOTE: The user options go first so that the settings with a core
     # NOTE: key of their own -- and the arguments passed after `--` --
@@ -381,6 +437,7 @@ def _compile_command(
     # NOTE: withdraws its own header default the moment a project names
     # NOTE: one.
     user_options = list(_lock_options(core_conf))
+    _reject_configured_output_file(user_options, pos_args)
     return Command([
         *_LOCK_COMMAND_PREFIX,
         *user_options,
