@@ -67,6 +67,18 @@ lock_input = requirements/base.in
 lock_file = requirements/base.txt
 ```
 
+`uv pip compile` compiles the union of any number of sources into one
+lock, so a project splitting its requirements across several files
+lists them all -- one per line in `tox.ini`, as an array in
+`tox.toml`:
+
+```ini
+[tox]
+lock_input =
+  requirements/base.in
+  requirements/test.in
+```
+
 The options `uv pip compile` is invoked with are settable the same
 way. They default to `--generate-hashes`; a project that cannot pin
 hashes -- one depending on a direct URL or an editable checkout --

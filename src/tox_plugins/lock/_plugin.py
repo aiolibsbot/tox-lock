@@ -43,7 +43,7 @@ _LOCK_COMMAND_PREFIX = (
 # NOTE: Both defaults are relative, and stay relative: the lock env runs
 # NOTE: in `change_dir`, which defaults to the tox root -- the same place
 # NOTE: the config file naming them is read from.
-_DEFAULT_LOCK_INPUT = Path('pyproject.toml')
+_DEFAULT_LOCK_INPUTS = (Path('pyproject.toml'),)
 _DEFAULT_LOCK_FILE = Path('requirements.txt')
 
 # NOTE: Hash pinning is a default rather than a fixture of the command:
@@ -130,6 +130,23 @@ class _SeedLoader(MemoryLoader):
         return replace(conf, _NoSectionReference(), value, args)
 
 
+def _lock_inputs(core_conf: ConfigSet) -> _c.Iterator[str]:
+    """Render the configured requirement sources as command arguments.
+
+    ``uv pip compile`` takes any number of them and compiles the union
+    into one lock, which is how a project splitting its requirements
+    across several ``*.in`` files produces a single pinned set. Keeping
+    the setting singular would have made that project rewrite the whole
+    command to add its second file -- the one thing the surrounding
+    settings exist to avoid.
+
+    :param core_conf: The core tox configuration set to read from.
+    :yields: The requirement sources, one command argument at a time.
+    """
+    for lock_input in core_conf['lock_input']:
+        yield str(lock_input)
+
+
 def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
     """Split the configured lock options into command arguments.
 
@@ -211,22 +228,22 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
 def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     """Inject default configuration for the locking environment.
 
-    The two file names the lock command is built around are settable
-    from the ``[tox]`` core section, so that a project keeping its lock
+    The file names the lock command is built around are settable from
+    the ``[tox]`` core section, so that a project keeping its lock
     somewhere other than ``./requirements.txt`` -- or compiling one out
-    of a ``requirements.in`` rather than ``pyproject.toml`` -- does not
-    have to restate the whole command to say so. Being core config, both
-    are read through the config file's own loader, so ``{tox_root}`` and
-    friends expand in them.
+    of a couple of ``requirements/*.in`` rather than ``pyproject.toml``
+    -- does not have to restate the whole command to say so. Being core
+    config, they are read through the config file's own loader, so
+    ``{tox_root}`` and friends expand in them.
 
     :param core_conf: The core tox configuration set to read from.
     :param state: The tox session state to inject the environment into.
     """
     core_conf.add_config(
         'lock_input',
-        of_type=Path,
-        default=_DEFAULT_LOCK_INPUT,
-        desc='the requirements source `tox-lock` compiles the lock from',
+        of_type=list[Path],
+        default=list(_DEFAULT_LOCK_INPUTS),
+        desc='the requirements sources `tox-lock` compiles the lock from',
     )
     core_conf.add_config(
         'lock_file',
@@ -251,7 +268,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         *_lock_options(core_conf),
         '--output-file',
         str(core_conf['lock_file']),
-        str(core_conf['lock_input']),
+        *_lock_inputs(core_conf),
         *_lock_args(state),
     ])
 
@@ -263,7 +280,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             base=[],
             description=(
                 f'[tox-lock] Compile {core_conf["lock_file"]} out of '
-                f'{core_conf["lock_input"]} using `uv pip compile '
+                f'{", ".join(_lock_inputs(core_conf))} using `uv pip compile '
                 f'{" ".join(_lock_options(core_conf))}`; pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e lock-deps -- --upgrade`.'

@@ -254,11 +254,39 @@ def test_posargs_reach_the_command_verbatim(
             {
                 'tox.toml': (
                     'lock_file = "constraints.txt"\n'
-                    'lock_input = "setup.cfg"\n'
+                    'lock_input = ["setup.cfg"]\n'
                 ),
             },
             ('--output-file constraints.txt setup.cfg',),
             id='toml-custom-paths',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_input =\n'
+                    '  requirements/base.in\n'
+                    '  requirements/test.in\n'
+                ),
+            },
+            (
+                '--output-file requirements.txt '
+                'requirements/base.in requirements/test.in',
+            ),
+            id='ini-several-inputs',
+        ),
+        pytest.param(
+            {
+                'tox.toml': (
+                    'lock_input = ["requirements/base.in", '
+                    '"requirements/test.in"]\n'
+                ),
+            },
+            (
+                '--output-file requirements.txt '
+                'requirements/base.in requirements/test.in',
+            ),
+            id='toml-several-inputs',
         ),
         pytest.param(
             {'tox.ini': '[testenv]\ncommands = pytest\n'},
@@ -319,17 +347,27 @@ def test_lock_paths_expand_substitutions(
 
 def test_lock_paths_are_shown_in_the_env_description(
     tox_project: ToxProjectCreator,
+    subtests: SubTests,
 ) -> None:
-    """``tox list`` tells the user which lock file the env writes.
+    """``tox list`` names the files the env reads and writes.
 
     :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
     """
     project = tox_project({
-        'tox.ini': '[tox]\nlock_file = constraints.txt\n',
+        'tox.ini': (
+            '[tox]\n'
+            'lock_file = constraints.txt\n'
+            'lock_input =\n'
+            '  base.in\n'
+            '  test.in\n'
+        ),
     })
     tox_invocation_result = project.run('list')
     tox_invocation_result.assert_success()
-    assert 'constraints.txt' in tox_invocation_result.out
+    for substring in ('constraints.txt', 'base.in, test.in'):
+        with subtests.test(msg=substring):
+            assert substring in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
