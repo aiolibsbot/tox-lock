@@ -244,8 +244,8 @@ def test_posargs_reach_the_command_verbatim(
             {
                 'tox.ini': (
                     '[tox]\n'
-                    'lock_file = requirements/base.txt\n'
-                    'lock_input = requirements/base.in\n'
+                    'lock_files = '
+                    'requirements/base.txt = requirements/base.in\n'
                 ),
             },
             ('--output-file requirements/base.txt requirements/base.in',),
@@ -254,8 +254,8 @@ def test_posargs_reach_the_command_verbatim(
         pytest.param(
             {
                 'tox.toml': (
-                    'lock_file = "constraints.txt"\n'
-                    'lock_input = ["setup.cfg"]\n'
+                    'lock_files = '
+                    '{ "constraints.txt" = ["setup.cfg"] }\n'
                 ),
             },
             ('--output-file constraints.txt setup.cfg',),
@@ -265,9 +265,8 @@ def test_posargs_reach_the_command_verbatim(
             {
                 'tox.ini': (
                     '[tox]\n'
-                    'lock_input =\n'
-                    '  requirements/base.in\n'
-                    '  requirements/test.in\n'
+                    'lock_files = requirements.txt = '
+                    'requirements/base.in, requirements/test.in\n'
                 ),
             },
             (
@@ -279,8 +278,8 @@ def test_posargs_reach_the_command_verbatim(
         pytest.param(
             {
                 'tox.toml': (
-                    'lock_input = ["requirements/base.in", '
-                    '"requirements/test.in"]\n'
+                    'lock_files = { "requirements.txt" = '
+                    '["requirements/base.in", "requirements/test.in"] }\n'
                 ),
             },
             (
@@ -333,7 +332,9 @@ def test_lock_paths_expand_substitutions(
     :param tox_project: Tox-provided project factory fixture.
     """
     project = tox_project({
-        'tox.ini': '[tox]\nlock_file = {env:LOCK_OUT:pinned.txt}\n',
+        'tox.ini':
+            '[tox]\nlock_files = '
+            '{env:LOCK_OUT:pinned.txt} = pyproject.toml\n',
     })
     tox_invocation_result = project.run(
         'config',
@@ -358,10 +359,7 @@ def test_lock_paths_are_shown_in_the_env_description(
     project = tox_project({
         'tox.ini': (
             '[tox]\n'
-            'lock_file = constraints.txt\n'
-            'lock_input =\n'
-            '  base.in\n'
-            '  test.in\n'
+            'lock_files = constraints.txt = base.in, test.in\n'
         ),
     })
     tox_invocation_result = project.run('list')
@@ -527,7 +525,11 @@ def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
             id='compiles-into-a-scratch-file-not-the-lock',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_file = requirements/base.txt\n'},
+            {
+                'tox.ini':
+                    '[tox]\nlock_files = '
+                    'requirements/base.txt = pyproject.toml\n',
+            },
             ('commands', 'commands_pre'),
             ('requirements/base.txt',),
             ('--output-file requirements/base.txt',),
@@ -536,7 +538,8 @@ def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
         pytest.param(
             {
                 'tox.ini': (
-                    '[tox]\nlock_options =\nlock_input = requirements.in\n'
+                    '[tox]\nlock_options =\n'
+                    'lock_files = requirements.txt = requirements.in\n'
                 ),
             },
             ('commands',),
@@ -641,7 +644,7 @@ def test_check_env_description_names_both_ends(
     """
     project = tox_project({
         'tox.ini': (
-            '[tox]\nlock_file = constraints.txt\nlock_input = base.in\n'
+            '[tox]\nlock_files = constraints.txt = base.in\n'
         ),
     })
     tox_invocation_result = project.run('list')
@@ -651,49 +654,181 @@ def test_check_env_description_names_both_ends(
             assert substring in tox_invocation_result.out
 
 
+def test_a_lock_path_is_nameable_once_for_both_ends(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """A project names a lock once and both ends of it follow.
+
+    With several locks there is no longer a single ``lock_file`` key an
+    env installing from one could point at, so the path is named where
+    it belongs -- in a section of the project's own -- and referenced
+    from both the mapping that compiles it and the env that installs
+    it. Stock tox resolves the reference on either side, so nothing
+    here owns the path twice.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files = {[lock]test} = requirements/test.in\n'
+            '[lock]\n'
+            'test = requirements/test.txt\n'
+            '[testenv:use]\n'
+            'skip_install = true\n'
+            'deps = -r {[lock]test}\n'
+        ),
+    })
+
+    expectations = (
+        ('lock-deps', 'commands', '--output-file requirements/test.txt'),
+        ('use', 'deps', 'deps = -r requirements/test.txt'),
+    )
+    for env_name, config_key, expected in expectations:
+        tox_invocation_result = project.run(
+            'config',
+            '-e',
+            env_name,
+            '-k',
+            config_key,
+        )
+        with subtests.test(msg=f'{env_name} resolves the reference'):
+            tox_invocation_result.assert_success()
+            assert expected in tox_invocation_result.out
+
+
 @pytest.mark.parametrize(
-    ('core_section', 'expected_deps'),
+    ('config_files', 'expected_commands'),
     (
         pytest.param(
-            '[tox]\n',
-            'deps = -r requirements.txt',
-            id='lock-file-left-at-its-default',
+            {
+                'tox.ini': (
+                    '[tox]\n'
+                    'lock_files =\n'
+                    '  requirements/base.txt = requirements/base.in\n'
+                    '  requirements/test.txt = '
+                    'requirements/base.in, requirements/test.in\n'
+                ),
+            },
+            (
+                '--output-file requirements/base.txt requirements/base.in',
+                '--output-file requirements/test.txt '
+                'requirements/base.in requirements/test.in',
+            ),
+            id='ini-several-locks',
         ),
         pytest.param(
-            '[tox]\nlock_file = requirements/base.txt\n',
-            'deps = -r requirements/base.txt',
-            id='lock-file-configured',
+            {
+                'tox.toml': (
+                    'lock_files = { "base.txt" = ["base.in"], '
+                    '"test.txt" = ["base.in", "test.in"] }\n'
+                ),
+            },
+            (
+                '--output-file base.txt base.in',
+                '--output-file test.txt base.in test.in',
+            ),
+            id='toml-several-locks',
         ),
     ),
 )
-def test_lock_file_is_referenceable_from_another_env(
-    core_section: str,
-    expected_deps: str,
+def test_every_configured_lock_gets_compiled(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    expected_commands: tuple[str, ...],
+    subtests: SubTests,
+) -> None:
+    """A project's dependency sets each get a lock of their own.
+
+    ``uv pip compile`` writes one output per invocation, so the writer
+    env runs one per configured lock rather than the plugin picking a
+    single set of requirements to be the project's.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param expected_commands: The compile commands that must be seeded.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    for expected_command in expected_commands:
+        with subtests.test(msg=expected_command):
+            assert expected_command in tox_invocation_result.out
+
+
+def test_locks_sharing_a_name_get_scratch_files_of_their_own(
     tox_project: ToxProjectCreator,
 ) -> None:
-    """Other envs can install from the lock without repeating its path.
+    """Two locks with one file name do not compile over each other.
 
-    ``{[tox]lock_file}`` resolves against the core config set, so the
-    setting answers whether or not the project ever wrote it down.
-    Were it only readable once spelled out in the config file, every
-    project consuming its own lock would have to restate the default
-    just to name it -- and would then own that path twice.
+    The check env compiles into the tox temp dir, and a project is free
+    to keep ``requirements/base.txt`` next to ``constraints/base.txt``.
+    Were the scratch file named after the lock alone, the second
+    compile would land on the first one's output and both comparisons
+    would read the same file -- a check that passes by overwriting its
+    own evidence.
 
-    :param core_section: The core section the project is configured with.
-    :param expected_deps: The dependency line the reference resolves to.
     :param tox_project: Tox-provided project factory fixture.
     """
     project = tox_project({
         'tox.ini': (
-            f'{core_section}\n'
-            '[testenv:use]\n'
-            'skip_install = true\n'
-            'deps = -r {[tox]lock_file}\n'
+            '[tox]\n'
+            'lock_files =\n'
+            '  requirements/base.txt = requirements/base.in\n'
+            '  constraints/base.txt = constraints/base.in\n'
         ),
     })
-    tox_invocation_result = project.run('config', '-e', 'use', '-k', 'deps')
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps-check',
+        '-k',
+        'commands',
+    )
     tox_invocation_result.assert_success()
-    assert expected_deps in tox_invocation_result.out
+
+    scratch_outputs = {
+        argument
+        for line in tox_invocation_result.out.splitlines()
+        for argument in line.split()
+        if argument.endswith('base.txt') and 'base.txt' in argument
+        if '.tmp' in argument
+    }
+    assert len(scratch_outputs) == 2  # noqa: PLR2004
+
+
+def test_locking_nothing_is_refused_rather_than_seeded(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """An empty mapping fails loudly instead of checking nothing.
+
+    Seeded as-is it would leave the writer compiling nothing and the
+    check passing every time, which is a green CI job asserting that no
+    lock is stale by virtue of there being none.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': '[tox]\nlock_files =\n'})
+    tox_invocation_result = project.run('list')
+
+    with subtests.test(msg='the run fails'):
+        assert tox_invocation_result.code != 0
+
+    for expected_text in ('`lock_files`', 'names no lock at all'):
+        with subtests.test(msg=f'the message says {expected_text}'):
+            assert expected_text in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
@@ -1240,7 +1375,7 @@ def test_a_user_supplied_output_file_is_refused(
     env_name: str,
     subtests: SubTests,
 ) -> None:
-    """Naming the output file fails with a pointer to ``lock_file``.
+    """Naming the output file fails with a pointer to ``lock_files``.
 
     It is the one option the plugin refuses rather than yields: the
     check env is a check only because its output goes somewhere else.
@@ -1268,7 +1403,7 @@ def test_a_user_supplied_output_file_is_refused(
     for expected_text in (
         '`--output-file`',
         expected_source,
-        '`lock_file`',
+        '`lock_files`',
     ):
         with subtests.test(msg=f'the message names {expected_text}'):
             assert expected_text in tox_invocation_result.out

@@ -43,11 +43,23 @@ _LOCK_COMMAND_PREFIX = (
     'compile',
 )
 
-# NOTE: Both defaults are relative, and stay relative: the lock env runs
+# NOTE: A mapping rather than a pair of keys because a project's
+# NOTE: dependencies rarely come as one set: this very plugin's `tox.ini`
+# NOTE: runs its tests, its builds and its metadata checks off three
+# NOTE: disjoint ones. `uv pip compile` writes a single output per
+# NOTE: invocation, so N sets means N invocations, and what has to be
+# NOTE: configurable is the *pairing* -- which sources go into which
+# NOTE: lock -- not two independent lists.
+#
+# NOTE: Keyed by the lock rather than by its sources because only the
+# NOTE: lock is unique: one `requirements/base.in` legitimately feeds
+# NOTE: both `base.txt` and `test.txt`, and a mapping keyed the other
+# NOTE: way would silently drop one of them.
+#
+# NOTE: The default is relative, and stays relative: the lock envs run
 # NOTE: in `change_dir`, which defaults to the tox root -- the same place
 # NOTE: the config file naming them is read from.
-_DEFAULT_LOCK_INPUTS = (Path('pyproject.toml'),)
-_DEFAULT_LOCK_FILE = Path('requirements.txt')
+_DEFAULT_LOCK_FILES = {Path('requirements.txt'): [Path('pyproject.toml')]}
 
 # NOTE: Hash pinning is a default rather than a fixture of the command:
 # NOTE: a project depending on a direct URL or an editable checkout
@@ -168,6 +180,13 @@ if lock_file.is_file():
 # NOTE: it in fact ignores. CI is usually the only place this ever
 # NOTE: runs, and a log saying nothing but "out of date" sends whoever
 # NOTE: reads it to recompile locally just to find out what moved.
+#
+# NOTE: Every configured lock is compared by one invocation, rather
+# NOTE: than one per lock, so that a project with several of them
+# NOTE: learns about all the drift in a single CI run. `commands` stop
+# NOTE: at the first failure, so a comparison per lock would report the
+# NOTE: first stale one and say nothing about the rest -- turning one
+# NOTE: red build into as many as there are locks behind it.
 _CHECK_COMPARE_SCRIPT = """
 import difflib, pathlib, sys
 
@@ -179,23 +198,34 @@ def pins(path):
     ]
 
 
-scratch_file, lock_file = map(pathlib.Path, sys.argv[1:])
-if not lock_file.is_file():
-    sys.exit(f'{lock_file} does not exist -- run `tox run -e lock-deps`.')
+paths = [pathlib.Path(arg) for arg in sys.argv[1:]]
+stale = []
+for scratch_file, lock_file in zip(paths[::2], paths[1::2]):
+    if not lock_file.is_file():
+        print(f'{lock_file} does not exist.', file=sys.stderr)
+        stale.append(lock_file)
+        continue
 
-locked, compiled = pins(lock_file), pins(scratch_file)
-if locked == compiled:
-    sys.exit(0)
+    locked, compiled = pins(lock_file), pins(scratch_file)
+    if locked == compiled:
+        continue
 
-for diff_line in difflib.unified_diff(
-        locked,
-        compiled,
-        fromfile=f'{lock_file} (locked)',
-        tofile=f'{lock_file} (recompiled)',
-        lineterm='',
-):
-    print(diff_line, file=sys.stderr)
-sys.exit(f'{lock_file} is out of date -- run `tox run -e lock-deps`.')
+    for diff_line in difflib.unified_diff(
+            locked,
+            compiled,
+            fromfile=f'{lock_file} (locked)',
+            tofile=f'{lock_file} (recompiled)',
+            lineterm='',
+    ):
+        print(diff_line, file=sys.stderr)
+    stale.append(lock_file)
+
+if stale:
+    sys.exit(
+        f'{", ".join(map(str, stale))} '
+        f'{"is" if len(stale) == 1 else "are"} out of date '
+        f'-- run `tox run -e lock-deps`.'
+    )
 """
 
 
@@ -276,21 +306,16 @@ class _SeedLoader(MemoryLoader):
         return replace(conf, _NoSectionReference(), value, args)
 
 
-def _lock_inputs(core_conf: ConfigSet) -> _c.Iterator[str]:
-    """Render the configured requirement sources as command arguments.
+def _lock_summary(lock_files: _c.Mapping[Path, _c.Sequence[Path]]) -> str:
+    """Spell out which sources each configured lock is compiled from.
 
-    ``uv pip compile`` takes any number of them and compiles the union
-    into one lock, which is how a project splitting its requirements
-    across several ``*.in`` files produces a single pinned set. Keeping
-    the setting singular would have made that project rewrite the whole
-    command to add its second file -- the one thing the surrounding
-    settings exist to avoid.
-
-    :param core_conf: The core tox configuration set to read from.
-    :yields: The requirement sources, one command argument at a time.
+    :param lock_files: The configured locks, mapped to their sources.
+    :returns: A human-readable rendering of the whole mapping.
     """
-    for lock_input in core_conf['lock_input']:
-        yield str(lock_input)
+    return '; '.join(
+        f'{lock_file} out of {", ".join(map(str, lock_inputs))}'
+        for lock_file, lock_inputs in lock_files.items()
+    )
 
 
 def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
@@ -389,7 +414,7 @@ def _reject_configured_output_file(
             f'come from {source}: it is what makes `{_CHECK_ENV_NAME}` a '
             f'check rather than a second writer, and pointing it at the '
             f'lock would have that env overwrite the very file it was '
-            f'asked to confirm. Set the `lock_file` core setting instead.',
+            f'asked to confirm. Set the `lock_files` core setting instead.',
         )
 
 
@@ -414,12 +439,14 @@ def _custom_compile_command(user_args: _c.Sequence[str]) -> tuple[str, ...]:
 
 def _compile_command(
     core_conf: ConfigSet,
+    lock_inputs: _c.Sequence[Path],
     output_file: Path,
     pos_args: tuple[str, ...],
 ) -> Command:
     """Build the ``uv pip compile`` invocation writing a given lock.
 
     :param core_conf: The core tox configuration set to read from.
+    :param lock_inputs: The requirement sources compiled into the lock.
     :param output_file: The path the compiled lock is written to.
     :param pos_args: The arguments the user passed after ``--``.
     :returns: The command compiling the configured sources.
@@ -443,7 +470,7 @@ def _compile_command(
         *user_options,
         '--output-file',
         str(output_file),
-        *_lock_inputs(core_conf),
+        *map(str, lock_inputs),
         *pos_args,
         # NOTE: Trailing the user's own arguments rather than leading
         # NOTE: them, so that everything a project wrote reads in the
@@ -522,16 +549,10 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     :param state: The tox session state to inject the envs into.
     """
     core_conf.add_config(
-        'lock_input',
-        of_type=list[Path],
-        default=list(_DEFAULT_LOCK_INPUTS),
-        desc='the requirements sources `tox-lock` compiles the lock from',
-    )
-    core_conf.add_config(
-        'lock_file',
-        of_type=Path,
-        default=_DEFAULT_LOCK_FILE,
-        desc='the lock file `tox-lock` compiles',
+        'lock_files',
+        of_type=dict[Path, list[Path]],
+        default=dict(_DEFAULT_LOCK_FILES),
+        desc='the locks `tox-lock` compiles, each mapped to its sources',
     )
     core_conf.add_config(
         'lock_uv',
@@ -570,7 +591,16 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the `uv pip compile` options `tox-lock` locks with',
     )
 
-    lock_file = core_conf['lock_file']
+    lock_files = core_conf['lock_files']
+    if not lock_files:
+        raise HandledError(
+            '`lock_files` names no lock at all, which would leave '
+            f'`{_ENV_NAME}` compiling nothing and `{_CHECK_ENV_NAME}` '
+            'passing without having checked anything. A project that '
+            'wants neither env drops `tox-lock` from its `requires` '
+            'instead.',
+        )
+
     lock_uv = core_conf['lock_uv']
     # NOTE: The interpreter is an input to the lock in the same way the
     # NOTE: resolver is: `uv pip compile` resolves for the Python it runs
@@ -583,7 +613,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     lock_pass_env = [*_LOCK_PASS_ENV, *core_conf['lock_pass_env']]
     lock_labels = core_conf['lock_labels']
     lock_check_labels = core_conf['lock_check_labels']
-    lock_inputs = ', '.join(_lock_inputs(core_conf))
+    lock_summary = _lock_summary(lock_files)
     pos_args = _lock_args(state)
 
     # NOTE: There is no cleanup counterpart env here on purpose: `uv pip
@@ -593,8 +623,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Compile {lock_file} out of '
-                f'{lock_inputs} using `uv pip compile '
+                f'[tox-lock] Compile {lock_summary} using `uv pip compile '
                 f'{" ".join(_lock_options(core_conf))}`; pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
@@ -604,25 +633,38 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             pass_env=list(lock_pass_env),
             deps=list(lock_uv),
             commands_pre=[],
-            commands=[_compile_command(core_conf, lock_file, pos_args)],
+            commands=[
+                _compile_command(core_conf, lock_inputs, lock_file, pos_args)
+                for lock_file, lock_inputs in lock_files.items()
+            ],
             commands_post=[],
             package='skip',
         ),
     )
 
-    # NOTE: The scratch lock goes under the session's own temp dir so
+    # NOTE: The scratch locks go under the session's own temp dir so
     # NOTE: that a check run leaves the work tree exactly as it found
-    # NOTE: it -- the point of the env being to say whether the lock is
-    # NOTE: stale, not to quietly fix it on the machine that asked.
-    scratch_file = core_conf['temp_dir'] / _CHECK_ENV_NAME / lock_file.name
+    # NOTE: it -- the point of the env being to say whether the locks
+    # NOTE: are stale, not to quietly fix them on the machine that
+    # NOTE: asked. One numbered directory each, rather than the lock's
+    # NOTE: bare file name, because two locks in different directories
+    # NOTE: may well share one: `requirements/base.txt` next to
+    # NOTE: `constraints/base.txt` would otherwise have the second
+    # NOTE: compile overwrite the first's scratch and both comparisons
+    # NOTE: read the same file.
+    scratch_root = core_conf['temp_dir'] / _CHECK_ENV_NAME
+    scratch_files = [
+        scratch_root / str(lock_index) / lock_file.name
+        for lock_index, lock_file in enumerate(lock_files)
+    ]
     state.conf.memory_seed_loaders[_CHECK_ENV_NAME].append(
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Check that {lock_file} is what compiling '
-                f'{lock_inputs} produces, and fail if it is not, without '
-                f'writing to it. Meant for CI; pass extra arguments after '
-                f'`--`, as with `{_ENV_NAME}`.'
+                f'[tox-lock] Check that every lock is what compiling its '
+                f'sources produces -- {lock_summary} -- and fail if it is '
+                f'not, without writing to it. Meant for CI; pass extra '
+                f'arguments after `--`, as with `{_ENV_NAME}`.'
             ),
             **lock_python,
             labels=list(lock_check_labels),
@@ -633,14 +675,32 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                     _CHECK_SEED_SCRIPT,
                     str(lock_file),
                     str(scratch_file),
-                ),
+                )
+                for lock_file, scratch_file in zip(
+                    lock_files,
+                    scratch_files,
+                    strict=True,
+                )
             ],
             commands=[
-                _compile_command(core_conf, scratch_file, pos_args),
+                *(
+                    _compile_command(
+                        core_conf,
+                        lock_inputs,
+                        scratch_file,
+                        pos_args,
+                    )
+                    for (_, lock_inputs), scratch_file
+                    in zip(lock_files.items(), scratch_files, strict=True)
+                ),
                 _python_script_command(
                     _CHECK_COMPARE_SCRIPT,
-                    str(scratch_file),
-                    str(lock_file),
+                    *(
+                        str(path)
+                        for lock_file, scratch_file
+                        in zip(lock_files, scratch_files, strict=True)
+                        for path in (scratch_file, lock_file)
+                    ),
                 ),
             ],
             commands_post=[],

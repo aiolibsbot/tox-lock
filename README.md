@@ -104,6 +104,12 @@ CI log that reports the staleness also says what it consists of:
 +sniffio==1.3.1
 ```
 
+Every configured lock is compared by one invocation rather than one
+each, so a project with several of them learns about all the drift in
+a single run -- `commands` stop at the first failure, and a comparison
+per lock would report the earliest stale one and say nothing about the
+rest.
+
 The recompile starts from a copy of the current lock, so the check
 reports *drift* -- your lock no longer matching the sources it claims
 to come from -- rather than the mere existence of a newer release
@@ -141,17 +147,27 @@ lock_options = --custom-compile-command "make lock"
 
 ## Using the lock
 
-Installing from the lock needs nothing from this plugin -- `tox` already
-takes a requirements file, and the path is the one you configured:
+Installing from a lock needs nothing from this plugin -- `tox` already
+takes a requirements file:
 
 ```ini
 [testenv]
-deps = -r {[tox]lock_file}
+deps = -r requirements.txt
 ```
 
-The reference resolves whether or not the project ever wrote
-`lock_file` down, so an env installing from the default lock names it
-once, here, instead of owning `requirements.txt` in two places.
+A project that would rather name the path once gives it a section of
+its own and references it from both ends, which is stock tox:
+
+```ini
+[tox]
+lock_files = {[lock]test} = requirements/test.in
+
+[lock]
+test = requirements/test.txt
+
+[testenv]
+deps = -r {[lock]test}
+```
 
 An env that would rather not run against a stale lock at all says so
 the ordinary way:
@@ -159,7 +175,7 @@ the ordinary way:
 ```ini
 [testenv]
 depends = lock-deps-check
-deps = -r {[tox]lock_file}
+deps = -r {[lock]test}
 ```
 
 
@@ -172,21 +188,49 @@ whole command:
 
 ```ini
 [tox]
-lock_input = requirements/base.in
-lock_file = requirements/base.txt
+lock_files = requirements/base.txt = requirements/base.in
 ```
 
-`uv pip compile` compiles the union of any number of sources into one
-lock, so a project splitting its requirements across several files
-lists them all -- one per line in `tox.ini`, as an array in
+`lock_files` maps each lock to the sources it is compiled from, so a
+project whose dependencies do not come as one set gets a lock per set
+rather than a single lock that is the union of all of them. This
+plugin's own `tox.ini` runs its tests, its builds and its metadata
+checks off three disjoint ones:
+
+```ini
+[tox]
+lock_files =
+  requirements/test.txt = requirements/test.in
+  requirements/build.txt = requirements/build.in
+  requirements/lint.txt = requirements/lint.in
+```
+
+`uv pip compile` writes one output per invocation, so `lock-deps` runs
+one per entry -- and compiles the union of however many sources an
+entry names. They are comma-separated in `tox.ini`, an array in
 `tox.toml`:
 
 ```ini
 [tox]
-lock_input =
-  requirements/base.in
-  requirements/test.in
+lock_files =
+  requirements/base.txt = requirements/base.in
+  requirements/test.txt = requirements/base.in, requirements/test.in
 ```
+
+```toml
+lock_files = { "requirements/base.txt" = ["requirements/base.in"] }
+```
+
+The mapping is keyed by the lock rather than by its sources because
+only the lock is unique -- one `requirements/base.in` legitimately
+feeds both `base.txt` and `test.txt` above, and a mapping keyed the
+other way would silently drop one of them.
+
+Emptying the setting is refused rather than obeyed: it would leave
+`lock-deps` compiling nothing and `lock-deps-check` passing every time
+without having checked anything, which is a green CI job asserting
+that no lock is stale by virtue of there being none. A project that
+wants neither env drops `tox-lock` from its `requires` instead.
 
 The options `uv pip compile` is invoked with are settable the same
 way. They default to `--generate-hashes`; a project that cannot pin
@@ -221,7 +265,7 @@ comes from:
 ```console
 $ tox run -q -e lock-deps-check -- -o requirements.txt
 ROOT: HandledError| `--output-file` is `tox-lock`'s to set and cannot
-come from the arguments after `--`: [...] Set the `lock_file` core
+come from the arguments after `--`: [...] Set the `lock_files` core
 setting instead.
 ```
 
@@ -280,7 +324,7 @@ project that would rather have them as one group is free to say so by
 giving both keys the same value -- that choice is just not the default.
 
 Substitutions work in all of them, as in any other core setting -- for
-instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
+instance, `lock_files = {env:LOCK_FILE:requirements.txt} = pyproject.toml`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last. `uv` accumulates the options it

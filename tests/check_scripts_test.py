@@ -163,3 +163,61 @@ def test_compare_shows_which_pins_moved(tmp_path: Path) -> None:
     # NOTE: The diff covers what was compared -- the pins -- so the
     # NOTE: headers the check deliberately ignores stay out of it.
     assert 'uv pip compile' not in compare_result.stderr
+
+
+def test_compare_reports_every_stale_lock_in_one_run(tmp_path: Path) -> None:
+    """One invocation covers all the locks, not just the first one.
+
+    ``commands`` stop at the first failure, so a comparison per lock
+    would report the earliest stale one and say nothing about the rest
+    -- turning a single red build into as many as there are locks
+    behind it.
+
+    :param tmp_path: Pytest's temporary directory fixture.
+    """
+    pairs: list[Path] = []
+    lock_files: list[Path] = []
+    for lock_name, pin in (('base.txt', 'attrs'), ('test.txt', 'idna')):
+        scratch_file = tmp_path / f'scratch-{lock_name}'
+        scratch_file.write_text(f'{pin}==2.0\n', encoding='utf-8')
+        lock_file = tmp_path / lock_name
+        lock_file.write_text(f'{pin}==1.0\n', encoding='utf-8')
+        pairs += [scratch_file, lock_file]
+        lock_files.append(lock_file)
+
+    compare_result = _run(_CHECK_COMPARE_SCRIPT, *pairs)
+
+    assert compare_result.returncode
+    assert '-attrs==1.0' in compare_result.stderr
+    assert '-idna==1.0' in compare_result.stderr
+    both_locks = ', '.join(map(str, lock_files))
+    assert f'{both_locks} are out of date' in compare_result.stderr
+
+
+def test_compare_leaves_the_locks_that_are_current_out_of_it(
+    tmp_path: Path,
+) -> None:
+    """A lock still matching its sources is not named as drifted.
+
+    :param tmp_path: Pytest's temporary directory fixture.
+    """
+    current_scratch = tmp_path / 'scratch-current.txt'
+    current_scratch.write_text('attrs==1.0\n', encoding='utf-8')
+    current_lock = tmp_path / 'current.txt'
+    current_lock.write_text('attrs==1.0\n', encoding='utf-8')
+    stale_scratch = tmp_path / 'scratch-stale.txt'
+    stale_scratch.write_text('idna==2.0\n', encoding='utf-8')
+    stale_lock = tmp_path / 'stale.txt'
+    stale_lock.write_text('idna==1.0\n', encoding='utf-8')
+
+    compare_result = _run(
+        _CHECK_COMPARE_SCRIPT,
+        current_scratch,
+        current_lock,
+        stale_scratch,
+        stale_lock,
+    )
+
+    assert compare_result.returncode
+    assert f'{stale_lock} is out of date' in compare_result.stderr
+    assert 'current.txt' not in compare_result.stderr

@@ -8,6 +8,8 @@ import pytest
 
 
 if _t.TYPE_CHECKING:
+    from pytest_subtests import SubTests
+
     from tox.pytest import ToxProject, ToxProjectCreator
 
 
@@ -88,3 +90,57 @@ def test_the_check_reports_the_pins_that_moved(
     assert f'-{_STALE_PIN}' in check_report
     assert f'{_LOCK_FILE_NAME} is out of date' in check_report
     assert lock_file.read_text(encoding='utf-8') == f'{_STALE_PIN}\n'
+
+
+@pytest.mark.network
+def test_several_locks_are_written_and_checked_together(
+    tox_project: ToxProjectCreator,
+    enable_pip_pypi_access: str | None,  # noqa: ARG001
+    subtests: SubTests,
+) -> None:
+    """Both configured locks get written, then both get checked.
+
+    The two share a file name on purpose: they compile into the same
+    tox temp dir, so a scratch file named after the lock alone would
+    have the second compile land on the first one's output.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param enable_pip_pypi_access: Tox-provided index-access opt-in.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            '  requirements/base.txt = pyproject.toml\n'
+            '  constraints/base.txt = extra.in\n'
+        ),
+        'pyproject.toml': _ZERO_DEP_PYPROJECT,
+        'extra.in': '',
+    })
+
+    project.run('run', '-e', 'lock-deps').assert_success()
+
+    lock_files = [
+        project.path / 'requirements' / 'base.txt',
+        project.path / 'constraints' / 'base.txt',
+    ]
+    for lock_file in lock_files:
+        with subtests.test(msg=f'{lock_file.name} was written'):
+            assert lock_file.is_file()
+
+    with subtests.test(msg='the check accepts what was just written'):
+        project.run('run', '-e', 'lock-deps-check').assert_success()
+
+    for lock_file in lock_files:
+        lock_file.write_text(f'{_STALE_PIN}\n', encoding='utf-8')
+
+    check_outcome = project.run('run', '-e', 'lock-deps-check')
+    check_report = f'{check_outcome.out}{check_outcome.err}'
+
+    with subtests.test(msg='the check fails'):
+        check_outcome.assert_failed()
+
+    for lock_file in lock_files:
+        with subtests.test(msg=f'{lock_file} is named as stale'):
+            assert str(lock_file.relative_to(project.path)) in check_report
