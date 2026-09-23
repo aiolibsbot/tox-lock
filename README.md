@@ -56,6 +56,39 @@ $ tox run -q -e lock-deps -- --python 3.10    # lock for a specific interpreter
 The lock is hash-pinned (`--generate-hashes`) and written whole on
 every run, so there is no stale-artifact cleanup step to remember.
 
+
+## Keeping the lock honest
+
+A lock is only worth as much as the last time somebody remembered to
+recompile it. The plugin exposes a second env for CI to say so out
+loud:
+
+```console
+$ tox run -q -e lock-deps-check
+```
+
+It recompiles the same sources with the same options into a scratch
+file under the tox temp dir, compares the result against your lock,
+and exits non-zero if they differ. Your lock file is never written to,
+so a failing check tells you to run `lock-deps` -- it does not quietly
+do it for you on a machine that was only meant to be looking.
+
+The comparison ignores comment lines, `uv`'s header among them: it
+names the command that produced the file, `--output-file` included,
+which is the one argument the check is obliged to change.
+
+The recompile starts from a copy of the current lock, so the check
+reports *drift* -- your lock no longer matching the sources it claims
+to come from -- rather than the mere existence of a newer release
+upstream. To ask that other question, pass the arguments for it:
+
+```console
+$ tox run -q -e lock-deps-check -- --upgrade   # would upgrading change anything?
+```
+
+
+## Configuration
+
 By default the lock is compiled out of `pyproject.toml` into
 `requirements.txt`, both relative to the tox root. Projects that keep
 theirs elsewhere say so in the core section rather than restating the
@@ -105,6 +138,9 @@ instance, `lock_file = {env:LOCK_FILE:requirements.txt}`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last and so win over `lock_options`.
+
+Both envs read the same three core settings, so a project configures
+its lock once and the check follows.
 
 The plugin's defaults sit between the `[testenv]` base section and
 your own env section: `[testenv]` settings never leak into this env,

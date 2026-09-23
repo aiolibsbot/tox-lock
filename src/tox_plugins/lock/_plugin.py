@@ -22,6 +22,8 @@ if _t.TYPE_CHECKING:
 
 
 _ENV_NAME = 'lock-deps'
+_CHECK_ENV_NAME = f'{_ENV_NAME}-check'
+_SEEDED_ENV_NAMES = (_ENV_NAME, _CHECK_ENV_NAME)
 
 _PYTHON_CLI_OPTIONS = (
     'python',
@@ -51,6 +53,47 @@ _DEFAULT_LOCK_FILE = Path('requirements.txt')
 # NOTE: cannot generate hashes at all, and is entitled to say so
 # NOTE: without also taking ownership of the rest of the command line.
 _DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
+
+# NOTE: `uv pip compile` seeds its resolution from the output file when
+# NOTE: one is already there, leaving every pin that does not have to
+# NOTE: move exactly where it is. The check recompiles into a copy of
+# NOTE: the lock rather than into an empty file so that it reports
+# NOTE: *drift* -- the lock no longer matching the sources it claims to
+# NOTE: come from -- and not the mere existence of a newer release
+# NOTE: upstream, which is what `-- --upgrade` is for.
+_CHECK_SEED_SCRIPT = """
+import pathlib, shutil, sys
+
+lock_file, scratch_file = map(pathlib.Path, sys.argv[1:])
+scratch_file.parent.mkdir(parents=True, exist_ok=True)
+scratch_file.unlink(missing_ok=True)
+if lock_file.is_file():
+    shutil.copyfile(lock_file, scratch_file)
+"""
+
+# NOTE: Comment lines are left out of the comparison because `uv`
+# NOTE: opens the file it writes with a header naming the command that
+# NOTE: produced it -- `--output-file` included, which is the one
+# NOTE: argument the check is obliged to change. The `# via ...`
+# NOTE: annotations trailing each pin go the same way; they restate the
+# NOTE: dependency graph the pins themselves encode.
+_CHECK_COMPARE_SCRIPT = """
+import pathlib, sys
+
+
+def pins(path):
+    return [
+        line for line in path.read_text(encoding='utf-8').splitlines()
+        if not line.lstrip().startswith('#')
+    ]
+
+
+scratch_file, lock_file = map(pathlib.Path, sys.argv[1:])
+if not lock_file.is_file():
+    sys.exit(f'{lock_file} does not exist -- run `tox run -e lock-deps`.')
+if pins(scratch_file) != pins(lock_file):
+    sys.exit(f'{lock_file} is out of date -- run `tox run -e lock-deps`.')
+"""
 
 
 class _NoSectionReference(ReplaceReference):
@@ -173,13 +216,50 @@ def _lock_args(state: State) -> tuple[str, ...]:
     return () if pos_args is None else pos_args
 
 
+def _python_script_command(script: str, *args: str) -> Command:
+    """Build a command running an in-process Python snippet.
+
+    :param script: The Python source to run.
+    :param args: The arguments to pass to the snippet.
+    :returns: The command running the snippet under the env's Python.
+    """
+    return Command([*_PYTHON_CLI_OPTIONS, '-c', script, *args])
+
+
+def _compile_command(
+    core_conf: ConfigSet,
+    output_file: Path,
+    pos_args: tuple[str, ...],
+) -> Command:
+    """Build the ``uv pip compile`` invocation writing a given lock.
+
+    :param core_conf: The core tox configuration set to read from.
+    :param output_file: The path the compiled lock is written to.
+    :param pos_args: The arguments the user passed after ``--``.
+    :returns: The command compiling the configured sources.
+    """
+    # NOTE: The user options go first so that the settings with a core
+    # NOTE: key of their own -- and the arguments passed after `--` --
+    # NOTE: stay the last word on the subject. `uv` takes the last
+    # NOTE: occurrence of a repeated option, so a stray `--output-file`
+    # NOTE: in `lock_options` loses to `lock_file`, where it belongs.
+    return Command([
+        *_LOCK_COMMAND_PREFIX,
+        *_lock_options(core_conf),
+        '--output-file',
+        str(output_file),
+        *_lock_inputs(core_conf),
+        *pos_args,
+    ])
+
+
 @impl
 def tox_extend_envs() -> _c.Iterable[str]:
-    """Declare the dependency locking environment.
+    """Declare the dependency locking environments.
 
     :returns: The names of the tox environments this plugin provides.
     """
-    return (_ENV_NAME,)
+    return _SEEDED_ENV_NAMES
 
 
 @impl
@@ -200,7 +280,7 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
     :param env_conf: The configuration set of the env being built.
     :param state: The tox session state holding the override map.
     """
-    if env_conf.name != _ENV_NAME:
+    if env_conf.name not in _SEEDED_ENV_NAMES:
         return
 
     # NOTE: `list.sort()` is stable, so the loaders keep their relative
@@ -237,7 +317,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     ``{tox_root}`` and friends expand in them.
 
     :param core_conf: The core tox configuration set to read from.
-    :param state: The tox session state to inject the environment into.
+    :param state: The tox session state to inject the envs into.
     """
     core_conf.add_config(
         'lock_input',
@@ -258,19 +338,9 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the `uv pip compile` options `tox-lock` locks with',
     )
 
-    # NOTE: The user options go first so that the settings with a core
-    # NOTE: key of their own -- and the arguments passed after `--` --
-    # NOTE: stay the last word on the subject. `uv` takes the last
-    # NOTE: occurrence of a repeated option, so a stray `--output-file`
-    # NOTE: in `lock_options` loses to `lock_file`, where it belongs.
-    lock_cmd = Command([
-        *_LOCK_COMMAND_PREFIX,
-        *_lock_options(core_conf),
-        '--output-file',
-        str(core_conf['lock_file']),
-        *_lock_inputs(core_conf),
-        *_lock_args(state),
-    ])
+    lock_file = core_conf['lock_file']
+    lock_inputs = ', '.join(_lock_inputs(core_conf))
+    pos_args = _lock_args(state)
 
     # NOTE: There is no cleanup counterpart env here on purpose: `uv pip
     # NOTE: compile` writes the output file whole, so a stale lock can
@@ -279,15 +349,50 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Compile {core_conf["lock_file"]} out of '
-                f'{", ".join(_lock_inputs(core_conf))} using `uv pip compile '
+                f'[tox-lock] Compile {lock_file} out of '
+                f'{lock_inputs} using `uv pip compile '
                 f'{" ".join(_lock_options(core_conf))}`; pass extra '
                 f'arguments after `--`. For example, '
-                f'`tox run -e lock-deps -- --upgrade`.'
+                f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
             deps=['uv'],
             commands_pre=[],
-            commands=[lock_cmd],
+            commands=[_compile_command(core_conf, lock_file, pos_args)],
+            commands_post=[],
+            package='skip',
+        ),
+    )
+
+    # NOTE: The scratch lock goes under the session's own temp dir so
+    # NOTE: that a check run leaves the work tree exactly as it found
+    # NOTE: it -- the point of the env being to say whether the lock is
+    # NOTE: stale, not to quietly fix it on the machine that asked.
+    scratch_file = core_conf['temp_dir'] / _CHECK_ENV_NAME / lock_file.name
+    state.conf.memory_seed_loaders[_CHECK_ENV_NAME].append(
+        _SeedLoader(
+            base=[],
+            description=(
+                f'[tox-lock] Check that {lock_file} is what compiling '
+                f'{lock_inputs} produces, and fail if it is not, without '
+                f'writing to it. Meant for CI; pass extra arguments after '
+                f'`--`, as with `{_ENV_NAME}`.'
+            ),
+            deps=['uv'],
+            commands_pre=[
+                _python_script_command(
+                    _CHECK_SEED_SCRIPT,
+                    str(lock_file),
+                    str(scratch_file),
+                ),
+            ],
+            commands=[
+                _compile_command(core_conf, scratch_file, pos_args),
+                _python_script_command(
+                    _CHECK_COMPARE_SCRIPT,
+                    str(scratch_file),
+                    str(lock_file),
+                ),
+            ],
             commands_post=[],
             package='skip',
         ),

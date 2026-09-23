@@ -498,3 +498,153 @@ def test_lock_options_reach_the_command_verbatim(
     )
     tox_invocation_result.assert_success()
     assert "--custom-compile-command 'make lock'" in tox_invocation_result.out
+
+
+def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
+    """The plugin contributes the ``lock-deps-check`` env.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+    assert 'lock-deps-check' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'config_keys', 'expected_present', 'expected_absent'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('commands',),
+            (
+                'lock-deps-check',
+                'requirements.txt pyproject.toml',
+                '--generate-hashes',
+            ),
+            ('--output-file requirements.txt',),
+            id='compiles-into-a-scratch-file-not-the-lock',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_file = requirements/base.txt\n'},
+            ('commands', 'commands_pre'),
+            ('requirements/base.txt',),
+            ('--output-file requirements/base.txt',),
+            id='scratch-file-follows-a-custom-lock-name',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\nlock_options =\nlock_input = requirements.in\n'
+                ),
+            },
+            ('commands',),
+            ('compile --output-file', 'requirements.in'),
+            ('--generate-hashes',),
+            id='honours-the-core-lock-settings',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('deps', 'package'),
+            ('deps = uv', 'package = skip'),
+            (),
+            id='runs-uv-without-building-the-project',
+        ),
+    ),
+)
+def test_check_env_config(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    config_keys: tuple[str, ...],
+    expected_present: tuple[str, ...],
+    expected_absent: tuple[str, ...],
+    subtests: SubTests,
+) -> None:
+    """The check env mirrors the lock env but writes somewhere else.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param config_keys: The env config keys to query.
+    :param expected_present: Substrings that must appear in the output.
+    :param expected_absent: Substrings that must not appear in the output.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps-check',
+        '-k',
+        *config_keys,
+    )
+    tox_invocation_result.assert_success()
+    for substring in expected_present:
+        with subtests.test(msg=f'present: {substring}'):
+            assert substring in tox_invocation_result.out
+    for substring in expected_absent:
+        with subtests.test(msg=f'absent: {substring}'):
+            assert substring not in tox_invocation_result.out
+
+
+def test_check_env_posargs_reach_the_compile_command(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """The check env passes arguments through like the lock env does.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps-check',
+        '-k',
+        'commands',
+        '--',
+        '--upgrade',
+    )
+    tox_invocation_result.assert_success()
+    assert 'pyproject.toml --upgrade' in tox_invocation_result.out
+
+
+def test_check_env_honours_a_cli_override(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """``-x`` reaches the check env, section or no section.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps-check',
+        '-k',
+        'deps',
+        '-x',
+        'testenv:lock-deps-check.deps=uv<99',
+    )
+    tox_invocation_result.assert_success()
+    assert 'deps = uv<99' in tox_invocation_result.out
+
+
+def test_check_env_description_names_both_ends(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """``tox list`` says what the check env compares.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\nlock_file = constraints.txt\nlock_input = base.in\n'
+        ),
+    })
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+    for substring in ('constraints.txt', 'base.in', 'fail if it is not'):
+        with subtests.test(msg=substring):
+            assert substring in tox_invocation_result.out
