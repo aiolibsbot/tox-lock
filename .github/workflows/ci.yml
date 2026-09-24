@@ -10,6 +10,15 @@ on:  # yamllint disable-line rule:truthy
   # NOTE: dists this suite has already accepted, rather than a second
   # NOTE: build of its own that nothing ran the matrix against.
   workflow_call:
+    inputs:
+      ref:
+        description: >-
+          The commit, tag or branch to run the suite against. Empty --
+          the default -- means whatever ref the caller was triggered
+          on, which is what the release workflow wants.
+        type: string
+        default: ''
+        required: false
     outputs:
       dists-artifact-id:
         description: The id of the artifact holding the built dists
@@ -25,6 +34,12 @@ on:  # yamllint disable-line rule:truthy
 # NOTE: hands its dists to. The rest of this project's dependencies are
 # NOTE: hash-pinned under `requirements/` by the very plugin it ships,
 # NOTE: and its CI supply chain was the half still floating.
+#
+# NOTE: Every checkout takes `ref` from the `workflow_call` input above,
+# NOTE: which is empty for every trigger but a call that names one. The
+# NOTE: lock refresher calls this workflow against the branch it has just
+# NOTE: pushed: without a ref the suite would grade the default branch
+# NOTE: and report green on locks it never read.
 #
 # NOTE: `persist-credentials: false` because `checkout` otherwise leaves
 # NOTE: the token it was handed in `.git/config`, where every later step
@@ -54,6 +69,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
 
     # v5.6.0
@@ -94,6 +110,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         # NOTE: `setuptools-scm` needs the tags to derive a version.
         fetch-depth: 0
@@ -123,6 +140,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         fetch-depth: 0
 
@@ -150,6 +168,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         fetch-depth: 0
 
@@ -177,6 +196,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         fetch-depth: 0
 
@@ -203,6 +223,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         fetch-depth: 0
 
@@ -242,6 +263,7 @@ jobs:
     # v4.4.0
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
         fetch-depth: 0
 

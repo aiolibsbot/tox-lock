@@ -1,0 +1,191 @@
+---
+
+name: 🔄 Refresh the locks
+
+# NOTE: `dependabot.yml` bumps the actions in `.github/workflows/` and
+# NOTE: says why in its own NOTE: a pin without a bumper trades a
+# NOTE: supply-chain risk for a staleness one, and the pair is the
+# NOTE: point. That reasoning applied to half the tree. The Python
+# NOTE: dependencies under `requirements/` are hash-pinned by the very
+# NOTE: plugin this repository ships, and nothing moved them: `uv pip
+# NOTE: compile` keeps the versions already written in its output
+# NOTE: unless it is asked to upgrade, so every lock here would hold
+# NOTE: whatever it was born with until a human remembered. This is the
+# NOTE: other half of the pair.
+#
+# NOTE: Dependabot is deliberately not pointed at `requirements/`
+# NOTE: instead. It would open a pull request per package against files
+# NOTE: that are compiled as a set -- seven locks sharing sources and a
+# NOTE: single resolver pin -- and each of its branches would undo the
+# NOTE: others. `lock-deps` recompiles all of them from one resolution,
+# NOTE: which is the only way they stay consistent with each other.
+on:  # yamllint disable-line rule:truthy
+  schedule:
+  # NOTE: Weekly, matching `dependabot.yml`'s cadence, and on a Monday
+  # NOTE: morning so the pull request is waiting at the start of a week
+  # NOTE: rather than ageing over a weekend.
+  - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+# NOTE: One refresh at a time. Two runs would race on the same branch
+# NOTE: and the loser's force-push would silently replace a resolution
+# NOTE: the other had already handed to CI.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  FORCE_COLOR: 1
+
+# NOTE: Nothing at the top; each job asks for exactly what it does.
+permissions: {}
+
+jobs:
+
+  refresh:
+    name: 🔒 Recompile the locks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      # NOTE: To push the branch the pull request is opened from. This
+      # NOTE: job writes to no other ref, and the branch it does write
+      # NOTE: to is force-pushed on every run.
+      contents: write
+
+    env:
+      REFRESH_BRANCH: maintenance/refresh-locks
+
+    outputs:
+      changed: ${{ steps.recompile.outputs.changed }}
+      branch: ${{ steps.recompile.outputs.branch }}
+
+    steps:
+    # NOTE: `persist-credentials` is left on here, alone among the
+    # NOTE: checkouts in this repository, because this is the one job
+    # NOTE: that pushes. The alternative -- a token spelled into a
+    # NOTE: remote URL -- puts it in the same `.git/config` by a longer
+    # NOTE: road, and in the shell trace besides. Nothing in this job
+    # NOTE: uploads an artifact, so there is nothing for the credential
+    # NOTE: to ride out on.
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: true  # zizmor: ignore[artipacked]
+        # NOTE: `setuptools-scm` needs the tags to derive a version for
+        # NOTE: the sdist `tox` builds before it runs an env.
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    # NOTE: `--upgrade` after `--` is how a project passes an option
+    # NOTE: through to `uv pip compile` for one run without writing it
+    # NOTE: into `lock_options`, where it would make every ordinary
+    # NOTE: `tox run -e lock-deps` a version bump as a side effect.
+    - name: Recompile every lock against the newest resolution
+      id: recompile
+      run: |
+        set -euo pipefail
+        python -Im tox run -e lock-deps -- --upgrade
+        echo "branch=${REFRESH_BRANCH}" >> "${GITHUB_OUTPUT}"
+        if git diff --quiet -- requirements/; then
+          echo 'changed=false' >> "${GITHUB_OUTPUT}"
+        else
+          echo 'changed=true' >> "${GITHUB_OUTPUT}"
+        fi
+        git diff --stat -- requirements/
+
+    # NOTE: Force-pushed rather than added to. The branch holds one
+    # NOTE: resolution, not a history of them, and last week's is of no
+    # NOTE: use to anyone once this week's exists.
+    - name: Push the refreshed locks
+      if: steps.recompile.outputs.changed == 'true'
+      run: |
+        set -euxo pipefail
+        git config user.name 'github-actions[bot]'
+        git config user.email \
+          '41898282+github-actions[bot]@users.noreply.github.com'
+        git switch --create "${REFRESH_BRANCH}"
+        git commit --all --message 'Refresh the locked requirements'
+        git push --force origin "${REFRESH_BRANCH}"
+
+  ci:
+    name: 🧪 CI
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    # NOTE: Against the pushed branch, not against whatever the schedule
+    # NOTE: fired on. A reusable workflow is read from the caller's ref
+    # NOTE: -- which is what should happen, the refresh branch changing
+    # NOTE: nothing but `requirements/` -- while its checkouts take the
+    # NOTE: ref handed to them here. Without that input the suite would
+    # NOTE: grade the default branch and report green on locks it had
+    # NOTE: never read.
+    uses: ./.github/workflows/ci.yml  # zizmor: ignore[self-repository]
+    with:
+      ref: ${{ needs.refresh.outputs.branch }}
+    permissions:
+      contents: read
+
+  pull-request:
+    name: 📬 Open the pull request
+    needs:
+    - refresh
+    - ci
+    # NOTE: `always()` so that a resolution the suite rejects still
+    # NOTE: arrives as a pull request. That is the single most valuable
+    # NOTE: thing this workflow can produce -- a named upstream release
+    # NOTE: that breaks this plugin -- and swallowing it on a red run
+    # NOTE: would leave the discovery to whoever next refreshed the
+    # NOTE: locks by hand.
+    if: always() && needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      # NOTE: To open or amend the pull request. The branch it points at
+      # NOTE: was already pushed by the job above.
+      pull-requests: write
+
+    steps:
+    - name: Open or update the pull request
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        REFRESH_BRANCH: ${{ needs.refresh.outputs.branch }}
+        CI_RESULT: ${{ needs.ci.result }}
+        RUN_URL: >-
+          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
+          github.run_id }}
+      run: |
+        set -euo pipefail
+        body="${RUNNER_TEMP}/pr-body.md"
+        {
+          echo "\`tox run -e lock-deps -- --upgrade\`, run on a schedule."
+          echo
+          echo "The suite was run against this branch before the pull"
+          echo "request existed, and **${CI_RESULT}**: ${RUN_URL}"
+          echo
+          echo "GitHub does not start a workflow for a branch pushed"
+          echo "with its own token, so the checks below this are empty"
+          echo "by design -- the run linked above is the one that read"
+          echo "these locks. Closing and reopening this pull request"
+          echo "starts an ordinary one."
+        } > "${body}"
+
+        if [ -n "$(gh pr list --head "${REFRESH_BRANCH}" \
+                     --state open --json number --jq '.[].number')" ]; then
+          gh pr edit "${REFRESH_BRANCH}" --body-file "${body}"
+        else
+          gh pr create \
+            --head "${REFRESH_BRANCH}" \
+            --title 'Refresh the locked requirements' \
+            --body-file "${body}"
+        fi
+
+...

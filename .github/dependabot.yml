@@ -4,7 +4,8 @@
 # NOTE: locked by this project's own plugin, and `lock-deps` moving a
 # NOTE: pin is a different mechanism from a bot opening a pull request
 # NOTE: per package -- two of them bumping the same files would each
-# NOTE: undo the other.
+# NOTE: undo the other. `.github/workflows/lock-refresh.yml` is that
+# NOTE: other mechanism, run on this same weekly cadence.
 #
 # NOTE: This is what keeps the commit pins in the workflows from being
 # NOTE: frozen rather than merely fixed. Pinning without a bumper trades
