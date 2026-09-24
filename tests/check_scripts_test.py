@@ -1,13 +1,15 @@
-"""Behavioral tests for the drift-check helper snippets."""
+"""Behavioral tests for the drift-check helper scripts."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import contextlib
+import io
 import typing as _t
 
 import pytest
 
+from tox_plugins.lock._check_compare import main as compare_locks
+from tox_plugins.lock._check_seed import main as seed_scratch
 from tox_plugins.lock._plugin import (
     _CHECK_COMPARE_SCRIPT,
     _CHECK_SEED_SCRIPT,
@@ -15,22 +17,55 @@ from tox_plugins.lock._plugin import (
 
 
 if _t.TYPE_CHECKING:
+    from collections import abc as _c
     from pathlib import Path
 
 
-def _run(script: str, *args: Path) -> subprocess.CompletedProcess[str]:
-    """Run one of the plugin's snippets the way the env would.
+class _ScriptResult(_t.NamedTuple):
+    """What running one of the scripts leaves behind."""
 
-    :param script: The Python source to run.
-    :param args: The paths to pass to the snippet.
-    :returns: The completed process, with its output captured.
+    returncode: int
+    stderr: str
+
+
+def _run(
+    script_main: _c.Callable[[_c.Sequence[str]], int],
+    *args: Path,
+) -> _ScriptResult:
+    """Run one of the plugin's scripts the way the env would.
+
+    Called rather than spawned: the scripts run under the lock env's
+    interpreter in production, which the test suite has no business
+    building, and an in-process call measures the coverage of code
+    that ships in the wheel like any other module.
+
+    :param script_main: The entry point of the script to run.
+    :param args: The paths to pass to the script.
+    :returns: The exit code it left with and what it wrote to stderr.
     """
-    return subprocess.run(  # noqa: S603
-        [sys.executable, '-c', script, *map(str, args)],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        returncode = script_main([str(arg) for arg in args])
+
+    return _ScriptResult(returncode, stderr.getvalue())
+
+
+@pytest.mark.parametrize(
+    'script',
+    (_CHECK_SEED_SCRIPT, _CHECK_COMPARE_SCRIPT),
+    ids=lambda script: str(script.name),
+)
+def test_the_check_scripts_ship_beside_the_plugin(script: Path) -> None:
+    """The commands name a file that is actually installed.
+
+    Nothing imports either script -- the check env runs them by path,
+    from wherever the dist was installed -- so a packaging change
+    dropping them would surface as a failing `lock-deps-check` in a
+    project rather than here.
+
+    :param script: The script path the plugin builds its command from.
+    """
+    assert script.is_file()
 
 
 def test_seed_copies_the_lock_into_a_missing_directory(tmp_path: Path) -> None:
@@ -42,7 +77,7 @@ def test_seed_copies_the_lock_into_a_missing_directory(tmp_path: Path) -> None:
     lock_file.write_text('attrs==1.0\n', encoding='utf-8')
     scratch_file = tmp_path / 'nested' / 'scratch' / 'requirements.txt'
 
-    assert _run(_CHECK_SEED_SCRIPT, lock_file, scratch_file).returncode == 0
+    assert _run(seed_scratch, lock_file, scratch_file).returncode == 0
     assert scratch_file.read_text(encoding='utf-8') == 'attrs==1.0\n'
 
 
@@ -57,7 +92,7 @@ def test_seed_clears_a_scratch_file_left_by_an_earlier_run(
     scratch_file.write_text('attrs==1.0\n', encoding='utf-8')
 
     seed_result = _run(
-        _CHECK_SEED_SCRIPT,
+        seed_scratch,
         tmp_path / 'absent.txt',
         scratch_file,
     )
@@ -110,7 +145,7 @@ def test_compare_reports_drift(
     lock_file = tmp_path / 'requirements.txt'
     lock_file.write_text(lock_text, encoding='utf-8')
 
-    compare_result = _run(_CHECK_COMPARE_SCRIPT, scratch_file, lock_file)
+    compare_result = _run(compare_locks, scratch_file, lock_file)
 
     assert bool(compare_result.returncode) is expected_failure
     if expected_failure:
@@ -128,7 +163,7 @@ def test_compare_fails_when_there_is_no_lock_to_compare(
     scratch_file.write_text('attrs==1.0\n', encoding='utf-8')
 
     compare_result = _run(
-        _CHECK_COMPARE_SCRIPT,
+        compare_locks,
         scratch_file,
         tmp_path / 'requirements.txt',
     )
@@ -154,7 +189,7 @@ def test_compare_shows_which_pins_moved(tmp_path: Path) -> None:
         encoding='utf-8',
     )
 
-    compare_result = _run(_CHECK_COMPARE_SCRIPT, scratch_file, lock_file)
+    compare_result = _run(compare_locks, scratch_file, lock_file)
 
     assert compare_result.returncode
     assert '-attrs==1.0' in compare_result.stderr
@@ -185,7 +220,7 @@ def test_compare_reports_every_stale_lock_in_one_run(tmp_path: Path) -> None:
         pairs += [scratch_file, lock_file]
         lock_files.append(lock_file)
 
-    compare_result = _run(_CHECK_COMPARE_SCRIPT, *pairs)
+    compare_result = _run(compare_locks, *pairs)
 
     assert compare_result.returncode
     assert '-attrs==1.0' in compare_result.stderr
@@ -211,7 +246,7 @@ def test_compare_leaves_the_locks_that_are_current_out_of_it(
     stale_lock.write_text('idna==1.0\n', encoding='utf-8')
 
     compare_result = _run(
-        _CHECK_COMPARE_SCRIPT,
+        compare_locks,
         current_scratch,
         current_lock,
         stale_scratch,

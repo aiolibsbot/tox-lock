@@ -152,84 +152,22 @@ _DEFAULT_LOCK_PASS_ENV: tuple[str, ...] = ()
 _LOCK_LABELS = ('lock',)
 _CHECK_LABELS = ('lock-check',)
 
-# NOTE: `uv pip compile` seeds its resolution from the output file when
-# NOTE: one is already there, leaving every pin that does not have to
-# NOTE: move exactly where it is. The check recompiles into a copy of
-# NOTE: the lock rather than into an empty file so that it reports
-# NOTE: *drift* -- the lock no longer matching the sources it claims to
-# NOTE: come from -- and not the mere existence of a newer release
-# NOTE: upstream, which is what `-- --upgrade` is for.
-_CHECK_SEED_SCRIPT = """
-import pathlib, shutil, sys
-
-lock_file, scratch_file = map(pathlib.Path, sys.argv[1:])
-scratch_file.parent.mkdir(parents=True, exist_ok=True)
-scratch_file.unlink(missing_ok=True)
-if lock_file.is_file():
-    shutil.copyfile(lock_file, scratch_file)
-"""
-
-# NOTE: Comment lines are left out of the comparison because `uv`
-# NOTE: opens the file it writes with a header naming the command that
-# NOTE: produced it -- `--output-file` included, which is the one
-# NOTE: argument the check is obliged to change. The `# via ...`
-# NOTE: annotations trailing each pin go the same way; they restate the
-# NOTE: dependency graph the pins themselves encode.
+# NOTE: The two halves of the check are modules shipped beside this
+# NOTE: one rather than snippets embedded in it. They were the only
+# NOTE: source in the tree that no gate read: `ruff` and `mypy` see a
+# NOTE: string literal, and a typo inside one surfaces as a traceback
+# NOTE: from a `commands` entry in somebody else's CI. As files they
+# NOTE: are linted and type-checked with everything else, and the test
+# NOTE: suite calls them rather than spawning them.
 #
-# NOTE: The diff is printed over the same filtered lines rather than
-# NOTE: over the files, so that what a reader is shown is exactly what
-# NOTE: was compared -- a diff full of header and `# via` noise would
-# NOTE: invite the conclusion that the check is tripping over comments
-# NOTE: it in fact ignores. CI is usually the only place this ever
-# NOTE: runs, and a log saying nothing but "out of date" sends whoever
-# NOTE: reads it to recompile locally just to find out what moved.
-#
-# NOTE: Every configured lock is compared by one invocation, rather
-# NOTE: than one per lock, so that a project with several of them
-# NOTE: learns about all the drift in a single CI run. `commands` stop
-# NOTE: at the first failure, so a comparison per lock would report the
-# NOTE: first stale one and say nothing about the rest -- turning one
-# NOTE: red build into as many as there are locks behind it.
-_CHECK_COMPARE_SCRIPT = """
-import difflib, pathlib, sys
-
-
-def pins(path):
-    return [
-        line for line in path.read_text(encoding='utf-8').splitlines()
-        if not line.lstrip().startswith('#')
-    ]
-
-
-paths = [pathlib.Path(arg) for arg in sys.argv[1:]]
-stale = []
-for scratch_file, lock_file in zip(paths[::2], paths[1::2]):
-    if not lock_file.is_file():
-        print(f'{lock_file} does not exist.', file=sys.stderr)
-        stale.append(lock_file)
-        continue
-
-    locked, compiled = pins(lock_file), pins(scratch_file)
-    if locked == compiled:
-        continue
-
-    for diff_line in difflib.unified_diff(
-            locked,
-            compiled,
-            fromfile=f'{lock_file} (locked)',
-            tofile=f'{lock_file} (recompiled)',
-            lineterm='',
-    ):
-        print(diff_line, file=sys.stderr)
-    stale.append(lock_file)
-
-if stale:
-    sys.exit(
-        f'{", ".join(map(str, stale))} '
-        f'{"is" if len(stale) == 1 else "are"} out of date '
-        f'-- run `tox run -e lock-deps`.'
-    )
-"""
+# NOTE: Run by path, not by `-m`: the lock envs install the resolver
+# NOTE: and nothing else, so `tox_plugins` is not importable from
+# NOTE: inside them -- and `-I` keeps the script's own directory off
+# NOTE: `sys.path` besides. Both scripts therefore use the standard
+# NOTE: library alone and take everything else as arguments.
+_SCRIPTS_DIR = Path(__file__).parent
+_CHECK_SEED_SCRIPT = _SCRIPTS_DIR / '_check_seed.py'
+_CHECK_COMPARE_SCRIPT = _SCRIPTS_DIR / '_check_compare.py'
 
 
 class _NoSectionReference(ReplaceReference):
@@ -369,14 +307,14 @@ def _lock_args(state: State) -> tuple[str, ...]:
     return () if pos_args is None else pos_args
 
 
-def _python_script_command(script: str, *args: str) -> Command:
-    """Build a command running an in-process Python snippet.
+def _python_script_command(script: Path, *args: str) -> Command:
+    """Build a command running one of the plugin's helper scripts.
 
-    :param script: The Python source to run.
-    :param args: The arguments to pass to the snippet.
-    :returns: The command running the snippet under the env's Python.
+    :param script: The path of the script to run.
+    :param args: The arguments to pass to the script.
+    :returns: The command running the script under the env's Python.
     """
-    return Command([*_PYTHON_CLI_OPTIONS, '-c', script, *args])
+    return Command([*_PYTHON_CLI_OPTIONS, str(script), *args])
 
 
 def _names_option(args: _c.Iterable[str], option: str) -> bool:
