@@ -1,0 +1,78 @@
+# NOTE: The tree carried eleven `# noqa` comments -- naming `ruff`
+# NOTE: codes, `wemake-python-styleguide` codes and `pylint` messages --
+# NOTE: for twenty-two increments during which no linter ran. A
+# NOTE: suppression comment is an assertion that some checker looks at
+# NOTE: the line it sits on, exactly as a committed config file is an
+# NOTE: assertion that something invokes the tool it configures. This
+# NOTE: file, the `lint` env in `tox.ini` and the CI job running it are
+# NOTE: what make those assertions true; the ones naming a linter that
+# NOTE: is still not run were deleted rather than left standing.
+
+target-version = 'py310'
+
+# NOTE: Matching the width the tree was already written to, and the one
+# NOTE: `.editorconfig` announces to editors.
+line-length = 79
+
+[lint]
+# NOTE: Everything, minus a short list with a reason each. A curated
+# NOTE: `select` grows only when somebody remembers to grow it, so the
+# NOTE: rules that would have caught a new mistake are the ones nobody
+# NOTE: enabled. `ALL` inverts that: a rule arrives switched on, and
+# NOTE: turning it off is a decision recorded here.
+select = ['ALL']
+ignore = [
+  # NOTE: There are no per-file copyright headers here and adding
+  # NOTE: eleven of them would say nothing `LICENSE` does not.
+  'CPY001',
+
+  # NOTE: One of each mutually exclusive pair -- `ruff` warns and picks
+  # NOTE: for us otherwise, which is a choice made by rule-code order
+  # NOTE: rather than by anybody.
+  'D203',  # in favour of D211, no blank line before a class docstring
+  'D213',  # in favour of D212, summary on the first line
+
+  # NOTE: `tox_plugins.lock` is a PEP 420 namespace subpackage on
+  # NOTE: purpose -- that is how a plugin lands inside a namespace
+  # NOTE: someone else owns -- so the missing `__init__.py` this rule
+  # NOTE: looks for is the design rather than an oversight.
+  'INP001',
+
+  # NOTE: Both of these move an exception's message away from the
+  # NOTE: condition that raises it: `EM102` into a local, `TRY003` into
+  # NOTE: a subclass. The messages here are the user-facing text of a
+  # NOTE: `tox` `HandledError`, written to be read at the moment it
+  # NOTE: fires, and `HandledError` is `tox`'s to subclass, not ours.
+  'EM102',
+  'TRY003',
+]
+
+[lint.flake8-quotes]
+# NOTE: The tree quotes inline strings with `'` and docstrings with
+# NOTE: `"""`, which is what `ruff format` would also produce for the
+# NOTE: latter. Stating it here is cheaper than rewriting 896 strings
+# NOTE: to match a default nobody chose.
+inline-quotes = 'single'
+multiline-quotes = 'double'
+docstring-quotes = 'double'
+
+[lint.flake8-pytest-style]
+# NOTE: `@pytest.mark.parametrize` is given tuples throughout -- the
+# NOTE: cases are fixed at collection time and nothing mutates them.
+parametrize-values-type = 'tuple'
+
+[lint.isort]
+lines-after-imports = 2
+
+[lint.per-file-ignores]
+'tests/*' = [
+  # NOTE: `assert` is how a test states its expectation; `pytest`
+  # NOTE: rewrites it precisely so that it can be.
+  'S101',
+
+  # NOTE: A test function's parameters are its fixture list, resolved
+  # NOTE: by `pytest` rather than passed by a caller, so their number
+  # NOTE: measures what the test needs rather than a signature someone
+  # NOTE: designed.
+  'PLR0913',
+]

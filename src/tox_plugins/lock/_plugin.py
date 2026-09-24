@@ -14,7 +14,7 @@ from tox.report import HandledError
 
 
 if _t.TYPE_CHECKING:
-    from collections import abc as _c  # noqa: WPS347
+    from collections import abc as _c
 
     from tox.config.loader.api import ConfigLoadArgs, Loader, Override
     from tox.config.main import Config
@@ -241,8 +241,8 @@ class _NoSectionReference(ReplaceReference):
 
     def __call__(
         self,
-        value: str,  # noqa: ARG002  # pylint: disable=unused-argument
-        conf_args: ConfigLoadArgs,  # noqa: ARG002  # pylint: disable=unused-argument
+        value: str,  # noqa: ARG002
+        conf_args: ConfigLoadArgs,  # noqa: ARG002
     ) -> None:
         """Decline to resolve the reference.
 
@@ -250,7 +250,7 @@ class _NoSectionReference(ReplaceReference):
         :param conf_args: The config load arguments (unused).
         :returns: :data:`None` -- tox's cue to leave the text as it is.
         """
-        return None
+        return
 
 
 class _SeedLoader(MemoryLoader):
@@ -425,7 +425,7 @@ def _reject_configured_output_file(
             continue
 
         raise HandledError(
-            f'`{_OUTPUT_FILE_OPTION}` is `tox-lock`\'s to set and cannot '
+            f"`{_OUTPUT_FILE_OPTION}` is `tox-lock`'s to set and cannot "
             f'come from {source}: it is what makes `{_CHECK_ENV_NAME}` a '
             f'check rather than a second writer, and pointing it at the '
             f'lock would have that env overwrite the very file it was '
@@ -571,7 +571,7 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
     # NOTE: overrides of every project written in the other one, so the
     # NOTE: key is taken from the very config set tox is assembling.
     overrides = state.conf.overrides.get(
-        env_conf._section.key,  # noqa: SLF001  # pylint: disable=protected-access
+        env_conf._section.key,  # noqa: SLF001
         [],
     )
     for loader in env_conf.loaders:
@@ -604,7 +604,10 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         'lock_pass_env',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_PASS_ENV),
-        desc='the extra environment variables the `tox-lock` envs pass through',
+        desc=(
+            'the extra environment variables '
+            'the `tox-lock` envs pass through'
+        ),
     )
     core_conf.add_config(
         'lock_options',

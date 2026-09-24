@@ -1,0 +1,11 @@
+# The linters whose suppression comments and directives the tree has
+# carried since its first commit: `# noqa` codes in `src/` and
+# `tests/`, and a `# yamllint disable-line` over the `on:` key in the
+# CI workflow. Neither tool ran until the `lint` env in `tox.ini` gave
+# them somewhere to run from.
+#
+# Standalone rather than compiled together with `test.in`: unlike
+# `mypy`, neither of these resolves the suite's imports, so what they
+# see does not depend on what is installed alongside them.
+ruff
+yamllint

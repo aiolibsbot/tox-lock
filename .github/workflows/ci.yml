@@ -86,6 +86,28 @@ jobs:
     - name: Type-check the plugin and its test suite
       run: python -Im tox run -e type-check
 
+  lint:
+    name: 🧹 Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # NOTE: One job rather than a matrix: which rules apply is settled
+    # NOTE: by `target-version` in `.ruff.toml`, not by the interpreter
+    # NOTE: the linter runs under.
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    - name: Lint the sources, the test suite and the CI workflows
+      run: python -Im tox run -e lint
+
   lock-check:
     name: 🔒 Locks up to date
     runs-on: ubuntu-latest

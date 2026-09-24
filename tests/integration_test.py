@@ -12,7 +12,6 @@ from packaging.version import Version
 
 if _t.TYPE_CHECKING:
     from pytest_subtests import SubTests
-
     from tox.pytest import ToxProjectCreator
 
 
@@ -226,11 +225,11 @@ def test_user_config_precedence(
 def test_posargs_reach_the_command_verbatim(
     tox_project: ToxProjectCreator,
 ) -> None:
-    """An escaped comment character survives into the lock command.
+    r"""An escaped comment character survives into the lock command.
 
     Seeding a :class:`~tox.config.types.Command` rather than a shell
     string keeps the arguments exactly as typed. A string would be
-    re-split by ``StrConvert.to_command()``, which rewrites ``\\#`` into
+    re-split by ``StrConvert.to_command()``, which rewrites ``\#`` into
     ``#`` -- silently pointing the option at a different file than the
     one the user named.
 
@@ -289,8 +288,10 @@ def test_posargs_reach_the_command_verbatim(
                 ),
             },
             (
-                '--output-file requirements.txt '
-                'requirements/base.in requirements/test.in',
+                (
+                    '--output-file requirements.txt '
+                    'requirements/base.in requirements/test.in'
+                ),
             ),
             id='ini-several-inputs',
         ),
@@ -302,8 +303,10 @@ def test_posargs_reach_the_command_verbatim(
                 ),
             },
             (
-                '--output-file requirements.txt '
-                'requirements/base.in requirements/test.in',
+                (
+                    '--output-file requirements.txt '
+                    'requirements/base.in requirements/test.in'
+                ),
             ),
             id='toml-several-inputs',
         ),
@@ -433,7 +436,10 @@ def test_lock_paths_are_shown_in_the_env_description(
             id='toml-an-option-and-its-value-are-split-apart',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_options = {env:LOCK_OPTS:--no-annotate}\n'},
+            {
+                'tox.ini':
+                    '[tox]\nlock_options = {env:LOCK_OPTS:--no-annotate}\n',
+            },
             ('compile --no-annotate --output-file',),
             ('--generate-hashes',),
             id='substitutions-are-expanded',
@@ -733,8 +739,10 @@ def test_a_lock_path_is_nameable_once_for_both_ends(
             },
             (
                 '--output-file requirements/base.txt requirements/base.in',
-                '--output-file requirements/test.txt '
-                'requirements/base.in requirements/test.in',
+                (
+                    '--output-file requirements/test.txt '
+                    'requirements/base.in requirements/test.in'
+                ),
             ),
             id='ini-several-locks',
         ),
@@ -1167,7 +1175,12 @@ def test_the_generic_env_does_not_reach_the_check_env(
 @pytest.mark.parametrize(
     ('config_files', 'label', 'expected_envs'),
     (
-        pytest.param({'tox.ini': '[tox]\n'}, 'lock', ['lock-deps'], id='ini-default'),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            'lock',
+            ['lock-deps'],
+            id='ini-default',
+        ),
         pytest.param(
             {'tox.ini': '[tox]\n'},
             'lock-check',
@@ -1319,7 +1332,9 @@ def test_uv_environment_is_always_passed_through(
     :param env_name: The seeded env to inspect.
     """
     project = tox_project({'tox.ini': '[tox]\n'})
-    tox_invocation_result = project.run('config', '-e', env_name, '-k', 'pass_env')
+    tox_invocation_result = project.run(
+        'config', '-e', env_name, '-k', 'pass_env',
+    )
     tox_invocation_result.assert_success()
     assert 'UV_*' in tox_invocation_result.out.split()
 
@@ -1331,9 +1346,16 @@ def test_uv_environment_is_always_passed_through(
             {'tox.ini': '[tox]\nlock_pass_env =\n    MY_INDEX_TOKEN\n'},
             id='ini',
         ),
-        pytest.param({'tox.toml': 'lock_pass_env = ["MY_INDEX_TOKEN"]\n'}, id='toml'),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_pass_env = {env:LOCK_VAR:MY_INDEX_TOKEN}\n'},
+            {'tox.toml': 'lock_pass_env = ["MY_INDEX_TOKEN"]\n'},
+            id='toml',
+        ),
+        pytest.param(
+            {
+                'tox.ini':
+                    '[tox]\n'
+                    'lock_pass_env = {env:LOCK_VAR:MY_INDEX_TOKEN}\n',
+            },
             id='substitutions-are-expanded',
         ),
     ),
@@ -1355,18 +1377,24 @@ def test_extra_pass_env_adds_to_the_uv_environment(
     :param env_name: The seeded env to inspect.
     """
     project = tox_project(config_files)
-    tox_invocation_result = project.run('config', '-e', env_name, '-k', 'pass_env')
+    tox_invocation_result = project.run(
+        'config', '-e', env_name, '-k', 'pass_env',
+    )
     tox_invocation_result.assert_success()
     passed_env = tox_invocation_result.out.split()
     assert {'UV_*', 'MY_INDEX_TOKEN'} <= set(passed_env)
 
 
-def test_pass_env_is_overridable_per_env(tox_project: ToxProjectCreator) -> None:
+def test_pass_env_is_overridable_per_env(
+        tox_project: ToxProjectCreator,
+) -> None:
     """A command-line override replaces what the plugin seeded.
 
     :param tox_project: Tox-provided project factory fixture.
     """
-    project = tox_project({'tox.ini': '[tox]\nlock_pass_env = MY_INDEX_TOKEN\n'})
+    project = tox_project(
+        {'tox.ini': '[tox]\nlock_pass_env = MY_INDEX_TOKEN\n'},
+    )
     tox_invocation_result = project.run(
         'config',
         '-e',

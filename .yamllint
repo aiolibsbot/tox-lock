@@ -1,0 +1,26 @@
+---
+
+# NOTE: The workflow under `.github/` was written for `yamllint` from
+# NOTE: the start -- explicit `---` and `...` markers, and a
+# NOTE: `# yamllint disable-line rule:truthy` over the `on:` key that
+# NOTE: YAML 1.1 reads as a boolean. Nothing ran it until now. See the
+# NOTE: note at the top of `.ruff.toml`.
+
+extends: default
+
+# NOTE: So that pointing the linter at the work tree checks the
+# NOTE: files this project wrote rather than every `.yaml` a
+# NOTE: dependency shipped into `.tox{/}`.
+ignore-from-file: .gitignore
+
+rules:
+  indentation:
+    # NOTE: GitHub's own workflow documentation writes a sequence at the
+    # NOTE: indentation of the key introducing it, and so does every
+    # NOTE: file here. The rule's default is the other convention.
+    indent-sequences: false
+  line-length:
+    # NOTE: The width the rest of the tree is written to.
+    max: 79
+
+...

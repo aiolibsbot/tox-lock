@@ -9,7 +9,6 @@ import pytest
 
 if _t.TYPE_CHECKING:
     from pytest_subtests import SubTests
-
     from tox.pytest import ToxProject, ToxProjectCreator
 
 

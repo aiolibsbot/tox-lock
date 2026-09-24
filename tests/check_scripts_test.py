@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess  # noqa: S404
+import subprocess
 import sys
 import typing as _t
 
 import pytest
 
-from tox_plugins.lock._plugin import (  # noqa: WPS436
+from tox_plugins.lock._plugin import (
     _CHECK_COMPARE_SCRIPT,
     _CHECK_SEED_SCRIPT,
 )
