@@ -69,11 +69,18 @@ def test_a_classifier_free_project_claims_nothing(tmp_path: Path) -> None:
     assert supported_pythons(_write_pyproject(tmp_path)) == ()
 
 
-def test_this_project_claims_its_own_floor() -> None:
-    """Check the derivation against the file the workflow reads."""
+def test_this_project_claims_real_versions_only() -> None:
+    """Check the derivation against the file the workflow reads.
+
+    Where the range *starts* is checked in
+    :mod:`python_floor_test` against the ``requires-python`` that
+    declares it, rather than against a number typed here -- a literal
+    in this file would be one more copy of the very fact that module
+    exists to keep single.
+    """
     versions = supported_pythons(_PYPROJECT)
 
-    assert versions[0] == '3.10'
+    assert versions
     assert '3' not in versions
 
 

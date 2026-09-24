@@ -13,7 +13,15 @@
 # NOTE: beside a test is sorted as somebody else's third-party package.
 src = ['src', 'tests']
 
-target-version = 'py310'
+# NOTE: No `target-version`. Unset, `ruff` resolves the floor out of
+# NOTE: `requires-python` in `pyproject.toml` -- which is where the
+# NOTE: floor is declared, and the only place it is enforced --
+# NOTE: standalone config file and all: `ruff check --show-settings`
+# NOTE: follows the declaration the moment it moves. Restating the
+# NOTE: number here would make a second copy that nothing compares,
+# NOTE: which is what `tests/python_floor_test.py` exists to prevent
+# NOTE: for the two tools that cannot read the authority themselves.
+
 
 # NOTE: Matching the width the tree was already written to, and the one
 # NOTE: `.editorconfig` announces to editors.

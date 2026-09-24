@@ -358,6 +358,14 @@ is the floor it resolves down to, and has to be said: left out, it is
 the interpreter `lock-deps` happens to run under, not the
 `requires-python` in `pyproject.toml`.
 
+Said rather than inferred, because a `requirements/*.in` is a list of
+requirements and carries no metadata to read a floor from. Compiling
+`pyproject.toml` itself -- which is what `lock_files` does by default
+-- is the case where `uv` reads `requires-python` and the option is
+redundant. Whichever way a project goes, the number is now written
+twice, so it is worth having something compare the copies: this
+repository's own are held together by `tests/python_floor_test.py`.
+
 `uv` reads its own configuration -- the index to resolve against,
 how to authenticate to it, which certificates to trust -- out of the
 environment, and `tox` passes none of it through by default: its
