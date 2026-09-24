@@ -1,0 +1,4 @@
+# The floor `pyproject.toml` declares. Compiled *together with*
+# `test.in` rather than instead of it: `uv pip compile` unions its
+# sources, so this file only has to say the one thing that differs.
+tox [testing] == 4.55.1

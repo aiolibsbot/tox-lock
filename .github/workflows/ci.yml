@@ -63,6 +63,30 @@ jobs:
     - name: Run the test suite against the declared floor
       run: python -Im tox run -e oldest-tox
 
+  lock-check:
+    name: 🔒 Locks up to date
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    # NOTE: The plugin locking its own dependencies is the only place
+    # NOTE: either lock env runs against a real project rather than a
+    # NOTE: fixture. This job is what keeps the five locks under
+    # NOTE: `requirements/` honest -- and, incidentally, what would
+    # NOTE: notice `lock-deps-check` going quietly green on drift.
+    - name: Verify the committed locks match their sources
+      run: python -Im tox run -e lock-deps-check
+
   dists:
     name: 📦 Build & check dists
     runs-on: ubuntu-latest

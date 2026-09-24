@@ -1,0 +1,17 @@
+# Everything the test suite needs *except* a pinned `tox`, so that the
+# `oldest-tox` lock beside it can swap which `tox` the tests run
+# against without restating the rest of the list.
+#
+# NOTE: `tox`'s `[testing]` extra provides `devpi-process` / `pytest`
+# NOTE: (needed by the `tox.pytest` plugin) starting from v4.54.0. They
+# NOTE: are listed here rather than left to the extra so that both
+# NOTE: locks get them whichever `tox` they pin.
+# Ref: https://github.com/tox-dev/tox/issues/3938
+covdefaults
+coverage
+devpi-process
+pytest
+pytest-cov
+pytest-subtests
+pytest-xdist
+tox [testing]

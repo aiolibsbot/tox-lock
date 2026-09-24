@@ -213,16 +213,20 @@ lock_files = requirements/base.txt = requirements/base.in
 `lock_files` maps each lock to the sources it is compiled from, so a
 project whose dependencies do not come as one set gets a lock per set
 rather than a single lock that is the union of all of them. This
-plugin's own `tox.ini` runs its tests, its builds and its metadata
-checks off three disjoint ones:
+plugin's own [`tox.ini`] names five, one of them the `uv` its own lock
+envs run:
 
 ```ini
 [tox]
 lock_files =
+  requirements/lock.txt = requirements/lock.in
   requirements/test.txt = requirements/test.in
+  requirements/oldest-tox.txt = requirements/test.in, requirements/oldest-tox.in
   requirements/build.txt = requirements/build.in
-  requirements/lint.txt = requirements/lint.in
+  requirements/metadata.txt = requirements/metadata.in
 ```
+
+[`tox.ini`]: https://github.com/tox-dev/tox-lock/blob/main/tox.ini
 
 `uv pip compile` writes one output per invocation, so `lock-deps` runs
 one per entry -- and compiles the union of however many sources an
@@ -336,6 +340,25 @@ One thing does not follow the inheritance: a `-x` override. `-x
 testenv:lock-deps.deps=uv==0.9.4` reaches the writer alone, because
 the check env inherits a config *section* and an override is not one.
 Run both envs off a one-off pin and the pin needs naming twice.
+
+Pinning the interpreter settles which resolution a lock records; it
+does not make that lock installable anywhere else. A project whose CI
+matrix installs *one* lock under several Pythons wants the resolution
+to cover all of them, which is `uv`'s job rather than tox's:
+
+```ini
+[tox]
+lock_options =
+  --generate-hashes
+  --universal
+  --python-version 3.10
+```
+
+`--universal` resolves across interpreters and writes the environment
+markers that sort the result back out at install time. `--python-version`
+is the floor it resolves down to, and has to be said: left out, it is
+the interpreter `lock-deps` happens to run under, not the
+`requires-python` in `pyproject.toml`.
 
 `uv` reads its own configuration -- the index to resolve against,
 how to authenticate to it, which certificates to trust -- out of the
