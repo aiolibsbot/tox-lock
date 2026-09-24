@@ -8,6 +8,11 @@
 # NOTE: what make those assertions true; the ones naming a linter that
 # NOTE: is still not run were deleted rather than left standing.
 
+# NOTE: The same two import roots `.mypy.ini` names, for the same
+# NOTE: reason: without `tests{/}` here a helper module imported from
+# NOTE: beside a test is sorted as somebody else's third-party package.
+src = ['src', 'tests']
+
 target-version = 'py310'
 
 # NOTE: Matching the width the tree was already written to, and the one

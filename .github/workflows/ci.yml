@@ -151,8 +151,8 @@ jobs:
     - name: Install tox
       run: python -Im pip install --upgrade 'tox >= 4.55.1'
 
-    - name: Build the dists and validate their metadata
-      run: python -Im tox run -e build-dists,metadata-validation
+    - name: Build the dists, validate their metadata and their contents
+      run: python -Im tox run -e build-dists,metadata-validation,verify-dists
 
     # NOTE: The plugin is a PEP 420 namespace subpackage, easy to leave out
     # NOTE: of a dist by accident. Installing from the built sdist -- never
