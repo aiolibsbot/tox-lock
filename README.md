@@ -287,6 +287,11 @@ lock_options =
   --no-annotate
 ```
 
+Each line is split the way the platform's own shell splits a command
+line, so a value quoted for the space in it keeps that space -- and a
+Windows path keeps its backslashes rather than losing them to an
+escape nobody wrote.
+
 Every setting above is a default, and a default steps aside when a
 project names the same option for itself. `--output-file` is the one
 exception -- it is not a default but the argument that tells the two

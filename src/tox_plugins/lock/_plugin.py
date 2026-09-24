@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import sys
 import typing as _t
 from pathlib import Path
 
@@ -281,6 +282,34 @@ def _lock_summary(lock_files: _c.Mapping[Path, _c.Sequence[Path]]) -> str:
     )
 
 
+def _split_option(option: str) -> _c.Iterator[str]:
+    r"""Split one configured option the way the running shell would.
+
+    :mod:`shlex` in its POSIX mode reads a backslash as an escape, and
+    on Windows a backslash is a path separator: ``--constraint
+    C:\pins\base.txt`` arrives at ``uv`` as ``C:pinsbase.txt``, a
+    path that does not exist, without a word said about it. ``tox``
+    meets the same problem parsing the option lines of a requirements
+    file and answers it the same way -- split non-POSIX, where the
+    backslash is nothing but a character.
+
+    What that mode costs is the quote stripping: a value quoted for the
+    space in it keeps the quotes in its token, and ``uv`` would take
+    them for part of the file name. They come off here, as ``tox``
+    takes them off a command argument.
+
+    :param option: One entry of ``lock_options``, as the user wrote it.
+    :yields: The command arguments that entry stands for.
+    """
+    if sys.platform != 'win32':
+        yield from shlex.split(option)
+        return
+
+    for arg in shlex.split(option, posix=False):
+        quoted = len(arg) > 1 and arg[0] == arg[-1] and arg[0] in '\'"'
+        yield arg[1:-1] if quoted else arg
+
+
 def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
     """Split the configured lock options into command arguments.
 
@@ -294,7 +323,7 @@ def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
     :yields: The lock options, one command argument at a time.
     """
     for option in core_conf['lock_options']:
-        yield from shlex.split(option)
+        yield from _split_option(option)
 
 
 def _lock_args(state: State) -> tuple[str, ...]:

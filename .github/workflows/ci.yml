@@ -13,8 +13,8 @@ env:
 jobs:
 
   test:
-    name: 🐍 ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: 🐍 ${{ matrix.python-version }} @ ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,6 +23,17 @@ jobs:
         - '3.12'
         - '3.11'
         - '3.10'
+        runner:
+        - ubuntu-latest
+        include:
+        - python-version: '3.13'
+          runner: windows-latest
+        - python-version: '3.13'
+          runner: macos-latest
+        - python-version: '3.10'
+          runner: windows-latest
+        - python-version: '3.10'
+          runner: macos-latest
 
     steps:
     - uses: actions/checkout@v4

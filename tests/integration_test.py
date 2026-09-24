@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import typing as _t
 from importlib.metadata import version as _installed_version
@@ -9,8 +10,9 @@ from importlib.metadata import version as _installed_version
 import pytest
 from packaging.version import Version
 from tox.config.loader.api import ConfigLoadArgs
+from tox.execute.request import shell_cmd
 
-from tox_plugins.lock._plugin import _SeedLoader
+from tox_plugins.lock._plugin import _SeedLoader, _split_option
 
 
 if _t.TYPE_CHECKING:
@@ -33,6 +35,21 @@ _substituted_overrides = pytest.mark.skipif(
     Version(_installed_version('tox')) < Version('4.62'),
     reason='`tox` expands the substitutions in an override since v4.62.0',
 )
+
+
+def _native_paths(expected: str) -> str:
+    """Respell a path expectation for the platform the suite runs on.
+
+    The config files these tests write spell their paths with forward
+    slashes -- the spelling both tox formats accept everywhere. What
+    comes back out of ``tox config`` is ``str(Path(...))``, so on
+    Windows the separators are backslashes and an expectation written
+    the way the input was matches nothing.
+
+    :param expected: The expected substring, POSIX-spelled.
+    :returns: The same substring, spelled for the running platform.
+    """
+    return expected.replace('/', os.sep)
 
 
 def test_lock_env_registered(tox_project: ToxProjectCreator) -> None:
@@ -104,7 +121,7 @@ def test_env_config(
     tox_invocation_result.assert_success()
     for substring in expected_present:
         with subtests.test(msg=substring):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
@@ -221,10 +238,10 @@ def test_user_config_precedence(
     tox_invocation_result.assert_success()
     for substring in expected_present:
         with subtests.test(msg=f'present: {substring}'):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
     for substring in expected_absent:
         with subtests.test(msg=f'absent: {substring}'):
-            assert substring not in tox_invocation_result.out
+            assert _native_paths(substring) not in tox_invocation_result.out
 
 
 # NOTE: The three cases above drive `_SeedLoader.substitute` through the
@@ -329,7 +346,7 @@ def test_posargs_reach_the_command_verbatim(
         'out\\#1.txt',
     )
     tox_invocation_result.assert_success()
-    assert "'out\\#1.txt'" in tox_invocation_result.out
+    assert shell_cmd(('out\\#1.txt',)) in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
@@ -425,7 +442,7 @@ def test_lock_paths_are_configurable(
     tox_invocation_result.assert_success()
     for substring in expected_present:
         with subtests.test(msg=substring):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
 
 
 def test_lock_paths_expand_substitutions(
@@ -470,7 +487,7 @@ def test_lock_paths_are_shown_in_the_env_description(
     tox_invocation_result.assert_success()
     for substring in ('constraints.txt', 'base.in, test.in'):
         with subtests.test(msg=substring):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
@@ -561,10 +578,10 @@ def test_lock_options_are_configurable(
     tox_invocation_result.assert_success()
     for substring in expected_present:
         with subtests.test(msg=f'present: {substring}'):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
     for substring in expected_absent:
         with subtests.test(msg=f'absent: {substring}'):
-            assert substring not in tox_invocation_result.out
+            assert _native_paths(substring) not in tox_invocation_result.out
 
 
 def test_lock_options_are_shown_in_the_env_description(
@@ -603,7 +620,10 @@ def test_lock_options_reach_the_command_verbatim(
         'commands',
     )
     tox_invocation_result.assert_success()
-    assert "--custom-compile-command 'make lock'" in tox_invocation_result.out
+    assert (
+        shell_cmd(('--custom-compile-command', 'make lock'))
+        in tox_invocation_result.out
+    )
 
 
 def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
@@ -692,10 +712,10 @@ def test_check_env_config(
     tox_invocation_result.assert_success()
     for substring in expected_present:
         with subtests.test(msg=f'present: {substring}'):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
     for substring in expected_absent:
         with subtests.test(msg=f'absent: {substring}'):
-            assert substring not in tox_invocation_result.out
+            assert _native_paths(substring) not in tox_invocation_result.out
 
 
 def test_check_env_posargs_reach_the_compile_command(
@@ -758,7 +778,7 @@ def test_check_env_description_names_both_ends(
     tox_invocation_result.assert_success()
     for substring in ('constraints.txt', 'base.in', 'fail if it is not'):
         with subtests.test(msg=substring):
-            assert substring in tox_invocation_result.out
+            assert _native_paths(substring) in tox_invocation_result.out
 
 
 def test_a_lock_path_is_nameable_once_for_both_ends(
@@ -789,8 +809,16 @@ def test_a_lock_path_is_nameable_once_for_both_ends(
         ),
     })
 
+    # NOTE: The compile command names the lock as a `Path`, so it
+    # NOTE: comes back out spelled with the platform's own separator.
+    # NOTE: `deps` is the string the project wrote, which tox hands
+    # NOTE: back untouched -- forward slash and all, everywhere.
     expectations = (
-        ('lock-deps', 'commands', '--output-file requirements/test.txt'),
+        (
+            'lock-deps',
+            'commands',
+            _native_paths('--output-file requirements/test.txt'),
+        ),
         ('use', 'deps', 'deps = -r requirements/test.txt'),
     )
     for env_name, config_key, expected in expectations:
@@ -872,7 +900,7 @@ def test_every_configured_lock_gets_compiled(
     tox_invocation_result.assert_success()
     for expected_command in expected_commands:
         with subtests.test(msg=expected_command):
-            assert expected_command in tox_invocation_result.out
+            assert _native_paths(expected_command) in tox_invocation_result.out
 
 
 def test_locks_sharing_a_name_get_scratch_files_of_their_own(
@@ -1512,7 +1540,7 @@ def test_lock_header_names_the_env_that_reproduces_it(
     )
     tox_invocation_result.assert_success()
     assert (
-        "--custom-compile-command 'tox run -e lock-deps'"
+        shell_cmd(('--custom-compile-command', 'tox run -e lock-deps'))
         in tox_invocation_result.out
     )
 
@@ -1580,9 +1608,9 @@ def test_a_configured_lock_header_replaces_the_seeded_one(
         *extra_args,
     )
     tox_invocation_result.assert_success()
-    assert expected_command in tox_invocation_result.out
+    assert _native_paths(expected_command) in tox_invocation_result.out
     assert (
-        "--custom-compile-command 'tox run -e lock-deps'"
+        shell_cmd(('--custom-compile-command', 'tox run -e lock-deps'))
         not in tox_invocation_result.out
     )
     assert tox_invocation_result.out.count('--custom-compile-command') == 1
@@ -1686,3 +1714,79 @@ def test_an_output_file_lookalike_option_is_left_alone(
     )
     tox_invocation_result.assert_success()
     assert '--no-strip-extras' in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('platform', 'option', 'expected_args'),
+    (
+        pytest.param(
+            'linux',
+            r'--constraint /pins/base.txt',
+            ('--constraint', '/pins/base.txt'),
+            id='posix-a-path',
+        ),
+        pytest.param(
+            'linux',
+            '--custom-compile-command "make lock"',
+            ('--custom-compile-command', 'make lock'),
+            id='posix-a-quoted-value',
+        ),
+        pytest.param(
+            'linux',
+            r'--constraint /pins/escaped\ name.txt',
+            ('--constraint', '/pins/escaped name.txt'),
+            id='posix-an-escaped-space',
+        ),
+        pytest.param(
+            'win32',
+            r'--constraint C:\pins\base.txt',
+            ('--constraint', r'C:\pins\base.txt'),
+            id='win32-a-path-keeps-its-separators',
+        ),
+        pytest.param(
+            'win32',
+            r'--constraint "C:\my pins\base.txt"',
+            ('--constraint', r'C:\my pins\base.txt'),
+            id='win32-a-quoted-path-loses-its-quotes',
+        ),
+        pytest.param(
+            'win32',
+            "--custom-compile-command 'make lock'",
+            ('--custom-compile-command', 'make lock'),
+            id='win32-single-quotes-too',
+        ),
+        pytest.param(
+            'win32',
+            '--generate-hashes',
+            ('--generate-hashes',),
+            id='win32-a-bare-option',
+        ),
+        pytest.param(
+            'win32',
+            '--custom-compile-command ""',
+            ('--custom-compile-command', ''),
+            id='win32-an-empty-quoted-value',
+        ),
+    ),
+)
+def test_an_option_is_split_the_way_the_platform_spells_paths(
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    option: str,
+    expected_args: tuple[str, ...],
+) -> None:
+    """``lock_options`` survives a backslash where one means a path.
+
+    Exercised by calling the splitter rather than by running ``tox``,
+    because what is being asserted is the behaviour of a platform the
+    suite is not necessarily running on -- and the two branches would
+    otherwise each be reachable on one CI runner only.
+
+    :param monkeypatch: Pytest's attribute patching fixture.
+    :param platform: The value :data:`sys.platform` is to report.
+    :param option: One entry of ``lock_options``, as the user wrote it.
+    :param expected_args: The command arguments it must split into.
+    """
+    monkeypatch.setattr(sys, 'platform', platform)
+    assert tuple(_split_option(option)) == expected_args
