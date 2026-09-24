@@ -213,18 +213,11 @@ lock_files = requirements/base.txt = requirements/base.in
 `lock_files` maps each lock to the sources it is compiled from, so a
 project whose dependencies do not come as one set gets a lock per set
 rather than a single lock that is the union of all of them. This
-plugin's own [`tox.ini`] names five, one of them the `uv` its own lock
-envs run:
-
-```ini
-[tox]
-lock_files =
-  requirements/lock.txt = requirements/lock.in
-  requirements/test.txt = requirements/test.in
-  requirements/oldest-tox.txt = requirements/test.in, requirements/oldest-tox.in
-  requirements/build.txt = requirements/build.in
-  requirements/metadata.txt = requirements/metadata.in
-```
+plugin's own [`tox.ini`] names one per env it installs anything into
+-- its tests, its type check, its linters, its builds, its metadata
+check, and the `uv` the lock envs themselves run. That list is not
+reproduced here: a copy of it in this file went stale the first time
+an env was added, and the file it was copied from is one click away.
 
 [`tox.ini`]: https://github.com/tox-dev/tox-lock/blob/main/tox.ini
 
