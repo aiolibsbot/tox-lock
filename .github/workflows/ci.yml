@@ -63,6 +63,29 @@ jobs:
     - name: Run the test suite against the declared floor
       run: python -Im tox run -e oldest-tox
 
+  type-check:
+    name: 🔍 Type check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # NOTE: One job rather than a matrix: `mypy` is told which
+    # NOTE: interpreter to analyse for by `python_version` in
+    # NOTE: `.mypy.ini`, so running it under four of them would repeat
+    # NOTE: the same check four times.
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    - name: Type-check the plugin and its test suite
+      run: python -Im tox run -e type-check
+
   lock-check:
     name: 🔒 Locks up to date
     runs-on: ubuntu-latest
