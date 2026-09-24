@@ -24,11 +24,16 @@ for itself:
   dropping the line would silently stop analysing for the floor
   altogether. It stays, and is checked here.
 
-``uv`` is the third case and sits with ``mypy``: it honours
-``requires-python`` when ``pyproject.toml`` is one of the files being
-compiled, which is this plugin's default, but every lock in this
-project is compiled out of ``requirements/*.in`` -- plain requirement
-lists carrying no metadata to read a floor from.
+``uv`` is the third case and sits with ``ruff``, though it took this
+plugin to put it there. ``uv`` itself reads no floor: compiled under
+3.13 and under 3.10 the same sources come out differently, and they do
+so even when the ``pyproject.toml`` declaring ``requires-python`` is
+the very file being compiled. What changed is that ``tox-lock`` now
+reads that declaration and hands ``uv`` a ``--python-version`` off it,
+so the copy in ``tox.ini`` went the way ``.ruff.toml``'s did: deleted
+rather than gated. The line is still matched here, because a project
+that puts one back has overridden the floor rather than restated it,
+and the two are worth telling apart.
 """
 
 from __future__ import annotations
@@ -90,11 +95,11 @@ _RESTATEMENTS = (
     _Restatement(
         config='tox.ini',
         pattern=re.compile(r'^  --python-version 3\.(?P<minor>\d+)$'),
-        inferred=False,
+        inferred=True,
         why=(
-            '`uv` resolves for the running interpreter unless told '
-            'otherwise, and a `requirements/*.in` carries no floor to tell '
-            'it from'
+            '`tox-lock` seeds `--python-version` off `requires-python` when '
+            '`lock_options` names no target, so saying nothing is right and '
+            'disagreeing is not'
         ),
     ),
 )

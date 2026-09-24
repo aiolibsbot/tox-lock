@@ -1902,3 +1902,201 @@ def test_the_writer_can_be_put_back_on_fail_fast(
     )
     tox_invocation_result.assert_success()
     assert 'ignore_errors = False' in tox_invocation_result.out
+
+
+_PROJECT_METADATA = (
+    '[project]\n'
+    'name = "probe"\n'
+    'version = "0"\n'
+    'requires-python = "{requires_python}"\n'
+)
+
+
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_the_declared_floor_is_what_the_lock_resolves_for(
+    tox_project: ToxProjectCreator,
+    env_name: str,
+) -> None:
+    """Both envs resolve for the oldest Python the project supports.
+
+    Left to itself ``uv`` resolves for the interpreter it runs under,
+    which makes the lock an artefact of the machine that wrote it and
+    has the check report drift on every other one.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param env_name: The seeded env whose command is inspected.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\n',
+        'pyproject.toml': _PROJECT_METADATA.format(requires_python='>= 3.10'),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert (
+        shell_cmd(('--python-version', '3.10')) in tox_invocation_result.out
+    )
+
+
+@pytest.mark.parametrize(
+    'requires_python',
+    ('>= 3.10, < 4', '~= 3.10', '== 3.10.*'),
+    ids=('capped-range', 'compatible-release', 'wildcard-equality'),
+)
+def test_every_spelling_of_a_floor_is_read(
+    tox_project: ToxProjectCreator,
+    requires_python: str,
+) -> None:
+    """A floor is a floor however the range around it is written.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param requires_python: The declaration to read the floor out of.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\n',
+        'pyproject.toml': _PROJECT_METADATA.format(
+            requires_python=requires_python,
+        ),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert (
+        shell_cmd(('--python-version', '3.10')) in tox_invocation_result.out
+    )
+
+
+@pytest.mark.parametrize(
+    'project_files',
+    (
+        pytest.param({'tox.ini': '[tox]\n'}, id='no-metadata-at-all'),
+        pytest.param(
+            {
+                'tox.ini': '[tox]\n',
+                'pyproject.toml': '[build-system]\nrequires = ["flit"]\n',
+            },
+            id='metadata-declaring-no-floor',
+        ),
+        pytest.param(
+            {
+                'tox.ini': '[tox]\n',
+                'pyproject.toml': _PROJECT_METADATA.format(
+                    requires_python='< 4',
+                ),
+            },
+            id='a-range-with-no-floor-in-it',
+        ),
+        pytest.param(
+            {
+                'tox.ini': '[tox]\n',
+                'pyproject.toml': _PROJECT_METADATA.format(
+                    requires_python='the newer the better',
+                ),
+            },
+            id='a-declaration-that-is-not-a-range',
+        ),
+    ),
+)
+def test_an_undeclared_floor_is_left_unsaid(
+    tox_project: ToxProjectCreator,
+    project_files: dict[str, str],
+) -> None:
+    """A project that declares no floor has none invented for it.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param project_files: The files to create in the project.
+    """
+    project = tox_project(project_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert '--python-version' not in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    ('config_files', 'extra_args', 'expected_target'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --python-version 3.12\n'},
+            (),
+            '--python-version 3.12',
+            id='the-target-named-in-lock-options',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --python-version=3.12\n'},
+            (),
+            '--python-version=3.12',
+            id='the-target-glued-to-its-value',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --python 3.12\n'},
+            (),
+            '--python 3.12',
+            id='an-interpreter-named-in-full',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = -p 3.12\n'},
+            (),
+            '-p 3.12',
+            id='an-interpreter-named-in-short',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('--', '--python-version', '3.12'),
+            '--python-version 3.12',
+            id='the-target-named-in-posargs',
+        ),
+    ),
+)
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+def test_a_named_python_target_replaces_the_declared_floor(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    extra_args: tuple[str, ...],
+    expected_target: str,
+    env_name: str,
+) -> None:
+    """The seeded floor withdraws rather than contradicting a choice.
+
+    ``uv`` takes the last ``--python-version`` it is given, so a seeded
+    floor trailing the user's own would not merely be redundant -- it
+    would quietly win, and a project resolving for 3.12 on purpose
+    would get its floor instead.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param extra_args: Extra CLI arguments to append to the ``tox`` call.
+    :param expected_target: The Python target the user configured.
+    :param env_name: The seeded env whose command is inspected.
+    """
+    project = tox_project({
+        **config_files,
+        'pyproject.toml': _PROJECT_METADATA.format(requires_python='>= 3.10'),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+        *extra_args,
+    )
+    tox_invocation_result.assert_success()
+    assert expected_target in tox_invocation_result.out
+    assert '3.10' not in tox_invocation_result.out

@@ -7,6 +7,14 @@ import sys
 import typing as _t
 from pathlib import Path
 
+
+if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
+    import tomllib
+else:  # pragma: <3.11 cover
+    import tomli as tomllib
+
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import Version
 from tox.config.loader.memory import MemoryLoader
 from tox.config.loader.replacer import ReplaceReference, replace
 from tox.config.types import Command
@@ -99,6 +107,44 @@ _OUTPUT_FILE_SHORT_OPTION = '-o'
 
 _CUSTOM_COMPILE_COMMAND_OPTION = '--custom-compile-command'
 _DEFAULT_CUSTOM_COMPILE_COMMAND = f'tox run -e {_ENV_NAME}'
+
+# NOTE: `uv pip compile` resolves for whichever interpreter it happens
+# NOTE: to run under. The same sources compiled on 3.13 and on 3.10
+# NOTE: come out different -- the newer one dropping every pin the
+# NOTE: older one carries behind a `python_version < "3.11"` marker --
+# NOTE: which makes the lock an artefact of the machine that wrote it.
+# NOTE: `lock-deps-check` then reports drift on any machine whose
+# NOTE: interpreter differs from the writer's, which is precisely what
+# NOTE: it promises not to do: its one claim is that the lock no longer
+# NOTE: matches its *sources*.
+#
+# NOTE: A project has already said which Python it supports, in
+# NOTE: `requires-python`, and `uv` does not read it -- not even when
+# NOTE: the `pyproject.toml` declaring it is the very file being
+# NOTE: compiled, which is this plugin's default `lock_files`. So the
+# NOTE: floor is read here and handed over, as a default like any
+# NOTE: other: a project resolving for something other than the oldest
+# NOTE: Python it supports names `--python-version` itself and this
+# NOTE: steps aside.
+#
+# NOTE: Only the Python axis is settled. A resolution is
+# NOTE: platform-specific too, and `--universal` is what covers that --
+# NOTE: but a lock aimed at one deployment target is a legitimate thing
+# NOTE: to want, and `--universal` changes what the lock *contains*
+# NOTE: rather than removing a nondeterminism from it. The floor is the
+# NOTE: other kind: the project has already declared the answer, and
+# NOTE: nothing was reading it.
+_PYTHON_VERSION_OPTION = '--python-version'
+_PYTHON_INTERPRETER_OPTION = '--python'
+_PYTHON_INTERPRETER_SHORT_OPTION = '-p'
+_PYPROJECT_TOML = 'pyproject.toml'
+
+# NOTE: `<` and `!=` say nothing about where a range begins, and `>`
+# NOTE: says where it does not begin rather than where it does: `>
+# NOTE: 3.10` admits 3.10.1, which `--python-version 3.10` would
+# NOTE: resolve below. A floor that cannot be read off exactly is left
+# NOTE: unsaid rather than guessed at.
+_FLOOR_OPERATORS = frozenset({'==', '>=', '~='})
 
 # NOTE: Seeded as a *default* on both envs rather than settled by a
 # NOTE: core key of its own: the resolver is one of the lock's inputs as
@@ -437,6 +483,91 @@ def _custom_compile_command(user_args: _c.Sequence[str]) -> tuple[str, ...]:
     return (_CUSTOM_COMPILE_COMMAND_OPTION, _DEFAULT_CUSTOM_COMPILE_COMMAND)
 
 
+def _requires_python_floor(tox_root: Path) -> str | None:
+    """Read the oldest Python the project declares it supports.
+
+    The authority is ``requires-python`` in the project's
+    ``pyproject.toml`` -- the range an installer enforces -- read with
+    the TOML parser ``tox`` already carries for its own config.
+
+    Nothing here is required to exist. A project may keep its metadata
+    in ``setup.cfg``, or lock a set of ``requirements/*.in`` without
+    being a distribution at all; in either case the plugin has no floor
+    to offer and says nothing rather than inventing one.
+
+    :param tox_root: The directory the project's metadata sits in.
+    :returns: The floor as ``3.x``, or :data:`None` if none is declared.
+    """
+    try:
+        metadata = tomllib.loads(
+            (tox_root / _PYPROJECT_TOML).read_text(encoding='utf-8'),
+        )
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+    project = metadata.get('project')
+    requires_python = (
+        project.get('requires-python') if isinstance(project, dict) else None
+    )
+    if not isinstance(requires_python, str):
+        return None
+
+    try:
+        # NOTE: `== 3.11.*` names the floor as readily as `>= 3.11`
+        # NOTE: does; it is only the wildcard that stops `Version`
+        # NOTE: reading it.
+        floors = [
+            Version(specifier.version.removesuffix('.*'))
+            for specifier in SpecifierSet(requires_python)
+            if specifier.operator in _FLOOR_OPERATORS
+        ]
+    except InvalidSpecifier:
+        return None
+
+    if not floors:
+        return None
+
+    floor = min(floors)
+    return f'{floor.major}.{floor.minor}'
+
+
+def _names_python_target(args: _c.Sequence[str]) -> bool:
+    """Tell whether some arguments name the Python to resolve for.
+
+    Both ways of naming it count: ``--python-version``, which states
+    the target outright, and ``--python``/``-p``, which states it by
+    naming an interpreter to read it off. A project that reached for
+    either has answered the question the seeded floor exists to answer.
+
+    :param args: The command arguments to look through.
+    :returns: :data:`True` if the target is named, :data:`False` if not.
+    """
+    return (
+        _names_option(args, _PYTHON_VERSION_OPTION)
+        or _names_option(args, _PYTHON_INTERPRETER_OPTION)
+        or any(
+            arg.startswith(_PYTHON_INTERPRETER_SHORT_OPTION) for arg in args
+        )
+    )
+
+
+def _python_version_option(
+    user_args: _c.Sequence[str],
+    tox_root: Path,
+) -> tuple[str, ...]:
+    """Render the resolution floor seeded into the compile command.
+
+    :param user_args: The arguments the user contributed, in full.
+    :param tox_root: The directory the project's metadata sits in.
+    :returns: The option and its value, or nothing at all.
+    """
+    if _names_python_target(user_args):
+        return ()
+
+    floor = _requires_python_floor(tox_root)
+    return () if floor is None else (_PYTHON_VERSION_OPTION, floor)
+
+
 def _compile_command(
     core_conf: ConfigSet,
     lock_inputs: _c.Sequence[Path],
@@ -465,6 +596,7 @@ def _compile_command(
     # NOTE: one.
     user_options = list(_lock_options(core_conf))
     _reject_configured_output_file(user_options, pos_args)
+    user_args = (*user_options, *pos_args)
     return Command([
         *_LOCK_COMMAND_PREFIX,
         *user_options,
@@ -472,13 +604,16 @@ def _compile_command(
         str(output_file),
         *map(str, lock_inputs),
         *pos_args,
+        # NOTE: Seeded only when the user named no target of their own,
+        # NOTE: and so never a duplicate `uv` would have to arbitrate.
+        *_python_version_option(user_args, core_conf['tox_root']),
         # NOTE: Trailing the user's own arguments rather than leading
         # NOTE: them, so that everything a project wrote reads in the
         # NOTE: order it wrote it. Nothing rides on the position: the
         # NOTE: seed is there only when no user argument claims the
         # NOTE: option, and would be an error rather than a loser if
         # NOTE: one did.
-        *_custom_compile_command((*user_options, *pos_args)),
+        *_custom_compile_command(user_args),
     ])
 
 

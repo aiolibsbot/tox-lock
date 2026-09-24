@@ -62,6 +62,15 @@ dependencies = [
   # * https://github.com/tox-dev/tox/pull/3951
   # * https://github.com/tox-dev/tox/pull/4048
   "tox >= 4.55.1",
+  # NOTE: Both are `tox`'s own dependencies and so are always present
+  # NOTE: wherever this plugin runs. They are named anyway because the
+  # NOTE: plugin imports them itself -- to read `requires-python` out of
+  # NOTE: a project's `pyproject.toml` -- and a transitive dependency is
+  # NOTE: a promise nobody made. No floor on either: the APIs used here
+  # NOTE: are `SpecifierSet`, `Version` and `tomllib.loads`, none of
+  # NOTE: which is newer than the `tox` release above.
+  "packaging",
+  "tomli ; python_version < '3.11'",
 ]
 dynamic = [
   "version",

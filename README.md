@@ -341,15 +341,12 @@ setting instead.
 The resolver itself is an input to the lock as much as the sources
 are: two `uv` releases can pin the same requirements differently, and
 a check running a newer `uv` than the machine that wrote the lock
-reports drift that is not there. So is the interpreter -- `uv pip
-compile` resolves for the Python it runs under, and the same sources
-compiled on 3.11 and on 3.13 legitimately differ. Both are settled in
-the env's own section, and the check env inherits them:
+reports drift that is not there. It is settled in the env's own
+section, and the check env inherits it:
 
 ```ini
 [testenv:lock-deps]
 deps = uv == 0.9.2
-base_python = py312
 ```
 
 That is stock tox configuration, not a setting this plugin invented:
@@ -369,32 +366,41 @@ testenv:lock-deps.deps=uv==0.9.4` reaches the writer alone, because
 the check env inherits a config *section* and an override is not one.
 Run both envs off a one-off pin and the pin needs naming twice.
 
-Pinning the interpreter settles which resolution a lock records; it
-does not make that lock installable anywhere else. A project whose CI
-matrix installs *one* lock under several Pythons wants the resolution
-to cover all of them, which is `uv`'s job rather than tox's:
+Pinning the resolver settles what a lock records; it does not make
+that lock installable anywhere else. A project whose CI matrix
+installs *one* lock on several platforms wants the resolution to cover
+all of them, which is `uv`'s job rather than tox's:
 
 ```ini
 [tox]
 lock_options =
   --generate-hashes
   --universal
-  --python-version 3.10
 ```
 
-`--universal` resolves across interpreters and writes the environment
-markers that sort the result back out at install time. `--python-version`
-is the floor it resolves down to, and has to be said: left out, it is
-the interpreter `lock-deps` happens to run under, not the
-`requires-python` in `pyproject.toml`.
+`--universal` resolves across platforms and interpreters and writes
+the environment markers that sort the result back out at install time.
 
-Said rather than inferred, because a `requirements/*.in` is a list of
-requirements and carries no metadata to read a floor from. Compiling
-`pyproject.toml` itself -- which is what `lock_files` does by default
--- is the case where `uv` reads `requires-python` and the option is
-redundant. Whichever way a project goes, the number is now written
-twice, so it is worth having something compare the copies: this
-repository's own are held together by `tests/python_floor_test.py`.
+The Python floor that resolution stops at does not have to be said.
+`tox-lock` reads `requires-python` out of the project's
+`pyproject.toml` and hands `uv` a `--python-version` off it, because
+`uv` will not: left alone it resolves for whichever interpreter
+`lock-deps` happened to run under -- and it does that even when the
+`pyproject.toml` declaring `requires-python` is the file being
+compiled. The lock is otherwise an artefact of the machine that wrote
+it, and `lock-deps-check` reports drift on every machine whose Python
+differs from that one.
+
+Like every other default here it withdraws when contradicted: name
+`--python-version`, `--python` or `-p` in `lock_options` or after `--`
+and the seeded floor is not added. A project that declares no
+`requires-python` gets no option seeded either.
+
+The platform axis is deliberately left alone. `--universal` changes
+what a lock *contains* -- pins for machines the project may never
+deploy to -- and a lock aimed at a single target is a legitimate thing
+to want. A Python floor is the other kind of question: the project had
+already answered it, and nothing was reading the answer.
 
 `uv` reads its own configuration -- the index to resolve against,
 how to authenticate to it, which certificates to trust -- out of the
