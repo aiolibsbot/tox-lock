@@ -2198,3 +2198,206 @@ def test_a_named_python_target_replaces_the_declared_floor(
     tox_invocation_result.assert_success()
     assert expected_target in tox_invocation_result.out
     assert '3.10' not in tox_invocation_result.out
+
+
+_SEVERAL_LOCKS = (
+    '[tox]\n'
+    'lock_files =\n'
+    '  requirements/base.txt = requirements/base.in\n'
+    '  requirements/test.txt = requirements/base.in, requirements/test.in\n'
+)
+
+
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+@pytest.mark.parametrize(
+    'selection',
+    (
+        ('--lock-file', 'requirements/test.txt'),
+        ('--lock-file', './requirements/test.txt'),
+    ),
+    ids=('as-declared', 'spelled-with-a-leading-dot'),
+)
+def test_a_named_lock_is_the_only_one_a_run_is_about(
+    *,
+    tox_project: ToxProjectCreator,
+    selection: tuple[str, ...],
+    env_name: str,
+    subtests: SubTests,
+) -> None:
+    """Naming one lock leaves every other one alone.
+
+    The smallest thing a multi-lock project could otherwise do is all
+    of them: one ``--upgrade-package`` would land a diff in every lock
+    when it was asked about one, and the way out was to run ``uv pip
+    compile`` by hand -- around the pinned resolver, the index
+    configuration and every seeded default.
+
+    The path is matched as a path rather than as the string it arrived
+    as, so a lock answers to the spelling a shell completes as readily
+    as to the one ``lock_files`` declares.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param selection: The lock-selecting arguments under test.
+    :param env_name: The seeded env whose command is inspected.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': _SEVERAL_LOCKS})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+        *selection,
+    )
+    tox_invocation_result.assert_success()
+
+    with subtests.test(msg='the named lock is there'):
+        assert (
+            _native_paths('requirements/test.txt') in tox_invocation_result.out
+        )
+
+    with subtests.test(msg='the one not named is not'):
+        assert (
+            _native_paths('requirements/base.txt')
+            not in tox_invocation_result.out
+        )
+
+
+def test_a_narrowed_run_keeps_the_declared_lock_order(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """A selection does not reorder the locks it picks from.
+
+    The order is the project's and can carry meaning: a lock compiled
+    under a ``--constraint`` naming another has to be written after it,
+    and a selection honouring the order it was typed in would quietly
+    compile one against the previous run's constraints.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': _SEVERAL_LOCKS})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+        '--lock-file',
+        'requirements/test.txt',
+        '--lock-file',
+        'requirements/base.txt',
+    )
+    tox_invocation_result.assert_success()
+
+    seeded_commands = tox_invocation_result.out
+    assert seeded_commands.index(
+        _native_paths('--output-file requirements/base.txt'),
+    ) < seeded_commands.index(
+        _native_paths('--output-file requirements/test.txt'),
+    )
+
+
+def test_a_narrowed_check_keeps_the_scratch_path_a_full_run_uses(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Narrowing a check does not move the file it compiles into.
+
+    Each lock keeps the position it holds in the whole mapping, so two
+    differently-narrowed runs cannot end up sharing a scratch file
+    whose name says nothing about which lock last wrote it.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({'tox.ini': _SEVERAL_LOCKS})
+
+    def scratch_paths(*selection: str) -> set[str]:
+        tox_invocation_result = project.run(
+            'config',
+            '-e',
+            'lock-deps-check',
+            '-k',
+            'commands_pre',
+            *selection,
+        )
+        tox_invocation_result.assert_success()
+        return {
+            argument
+            for line in tox_invocation_result.out.splitlines()
+            for argument in line.split()
+            if argument.endswith(_native_paths('test.txt'))
+            if '.tmp' in argument
+        }
+
+    narrowed = scratch_paths('--lock-file', 'requirements/test.txt')
+    assert narrowed
+    assert narrowed == scratch_paths()
+
+
+def test_a_narrowed_run_describes_the_locks_it_is_about(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """The env description follows the selection it will act on.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': _SEVERAL_LOCKS})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'description',
+        '--lock-file',
+        'requirements/test.txt',
+    )
+    tox_invocation_result.assert_success()
+
+    expectations = {
+        'the named lock is described': _native_paths(
+            'requirements/test.txt out of',
+        ) in tox_invocation_result.out,
+        'the one not named is not': _native_paths(
+            'requirements/base.txt out of',
+        ) not in tox_invocation_result.out,
+    }
+    for message, expectation in expectations.items():
+        with subtests.test(msg=message):
+            assert expectation
+
+
+def test_an_unknown_lock_file_is_refused(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """A name no configured lock answers to fails the run.
+
+    Selecting nothing instead would have the check env pass without
+    having compared a single lock -- the same green-on-nothing the
+    empty ``lock_files`` mapping is refused for.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': _SEVERAL_LOCKS})
+    tox_invocation_result = project.run(
+        'list',
+        '--lock-file',
+        'requirements/dev.txt',
+    )
+
+    with subtests.test(msg='the run fails'):
+        assert tox_invocation_result.code != 0
+
+    for expected_text in (
+        '`--lock-file`',
+        'requirements/dev.txt',
+        'does not declare',
+        'requirements/base.txt',
+    ):
+        with subtests.test(msg=f'the message names {expected_text}'):
+            assert (
+                _native_paths(expected_text) in tox_invocation_result.out
+            )

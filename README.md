@@ -76,6 +76,7 @@ Then invoke the env the plugin exposes:
 $ tox run -q -e lock-deps                     # write a hash-pinned requirements.txt
 $ tox run -q -e lock-deps -- --upgrade        # pass args through to `uv pip compile`
 $ tox run -q -e lock-deps -- --python 3.10    # lock for a specific interpreter
+$ tox run -q -e lock-deps --lock-file requirements/test.txt   # just the one lock
 ```
 
 The lock is hash-pinned (`--generate-hashes`) and written whole on
@@ -271,6 +272,37 @@ The mapping is keyed by the lock rather than by its sources because
 only the lock is unique -- one `requirements/base.in` legitimately
 feeds both `base.txt` and `test.txt` above, and a mapping keyed the
 other way would silently drop one of them.
+
+A project with several of them rarely wants to recompile all of them at
+once. `--lock-file` names the ones an invocation is about, and takes
+the path exactly as `lock_files` spells it:
+
+```console
+$ tox run -q -e lock-deps --lock-file requirements/test.txt -- --upgrade-package attrs
+$ tox run -q -e lock-deps-check --lock-file requirements/test.txt
+```
+
+It is repeatable, and every configured lock is the default -- so a
+plain `tox run -e lock-deps` keeps doing what it did. Both envs read
+it: narrowing a check is how CI asks about one lock without waiting on
+the resolution of the rest.
+
+A command-line option rather than a setting, because it says nothing
+about the project -- `lock_files` has already said which locks there
+are. And a name that setting does not declare is refused rather than
+quietly matching nothing, which would have `lock-deps-check` pass
+without having compared a single lock:
+
+```console
+$ tox run -q -e lock-deps --lock-file requirements/dev.txt
+ROOT: HandledError| `--lock-file` names requirements/dev.txt, which
+`lock_files` does not declare. It declares requirements/base.txt,
+requirements/test.txt. [...]
+```
+
+The selection is compiled in the order `lock_files` declares, not the
+order it is typed in: that order is the project's, and a lock compiled
+under a `--constraint` naming another has to be written after it.
 
 `uv` reads the lock's *format* off its file name, so naming it is
 also how a project picks one. A lock called `pylock.toml` -- or

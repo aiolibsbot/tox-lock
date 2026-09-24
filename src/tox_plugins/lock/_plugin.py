@@ -25,11 +25,20 @@ from tox.report import HandledError
 if _t.TYPE_CHECKING:
     from collections import abc as _c
 
+    from tox.config.cli.parser import ToxParser
     from tox.config.loader.api import ConfigLoadArgs, Loader, Override
     from tox.config.main import Config
     from tox.config.of_type import ConfigDynamicDefinition
     from tox.config.sets import ConfigSet, EnvConfigSet
     from tox.session.state import State
+
+    # NOTE: One configured lock as the seeding code needs it: its
+    # NOTE: position in the whole `lock_files` mapping, the lock
+    # NOTE: itself, and the sources it is compiled from. The position
+    # NOTE: travels with the lock because a narrowed run must still
+    # NOTE: name the scratch file the same way a full one does -- see
+    # NOTE: `_selected_lock_files`.
+    _SelectedLock: _t.TypeAlias = tuple[int, Path, _c.Sequence[Path]]
 
 
 _ENV_NAME = 'lock-deps'
@@ -70,6 +79,28 @@ _LOCK_COMMAND_PREFIX = (
 # NOTE: in `change_dir`, which defaults to the tox root -- the same place
 # NOTE: the config file naming them is read from.
 _DEFAULT_LOCK_FILES = {Path('requirements.txt'): [Path('pyproject.toml')]}
+
+# NOTE: A command-line option rather than a core setting, because it
+# NOTE: does not say anything about the project -- `lock_files` already
+# NOTE: does that. It says which of the locks a project has one
+# NOTE: invocation is about, which is a property of the invocation.
+#
+# NOTE: Without it, the smallest thing a project with several locks can
+# NOTE: do is all of them: `tox run -e lock-deps -- --upgrade-package
+# NOTE: attrs` recompiles every entry and lands a diff in each, when
+# NOTE: one was asked about. The way out was to run `uv pip compile` by
+# NOTE: hand -- around the pinned resolver, the passed-through index
+# NOTE: configuration, the seeded floor and the hash pinning -- which
+# NOTE: is the invocation the header comment this plugin seeds exists
+# NOTE: to steer people away from.
+#
+# NOTE: Repeatable, and matched against `lock_files` exactly: a name
+# NOTE: the setting does not declare is a typo, and a typo that
+# NOTE: silently selected nothing would have `lock-deps-check` pass
+# NOTE: having checked no lock at all. Naming one is refused the same
+# NOTE: way an empty `lock_files` is.
+_LOCK_FILE_CLI_OPTION = '--lock-file'
+_LOCK_FILE_CLI_DEST = 'lock_file'
 
 # NOTE: Empty, so that `lock_options` is a list of what a project
 # NOTE: *adds*. It replaces whatever is in it -- that is what a tox
@@ -357,16 +388,70 @@ class _DefaultSeedLoader(_SeedLoader):
     """
 
 
-def _lock_summary(lock_files: _c.Mapping[Path, _c.Sequence[Path]]) -> str:
-    """Spell out which sources each configured lock is compiled from.
+def _lock_summary(selected_locks: _c.Sequence[_SelectedLock]) -> str:
+    """Spell out which sources each selected lock is compiled from.
 
-    :param lock_files: The configured locks, mapped to their sources.
-    :returns: A human-readable rendering of the whole mapping.
+    :param selected_locks: The locks this run is about, with their sources.
+    :returns: A human-readable rendering of the selection.
     """
     return '; '.join(
         f'{lock_file} out of {", ".join(map(str, lock_inputs))}'
-        for lock_file, lock_inputs in lock_files.items()
+        for _, lock_file, lock_inputs in selected_locks
     )
+
+
+def _selected_lock_files(
+    lock_files: _c.Mapping[Path, _c.Sequence[Path]],
+    state: State,
+) -> list[_SelectedLock]:
+    """Pick out the locks this invocation was asked about.
+
+    Every configured lock unless the command line named some, in which
+    case those -- in the order ``lock_files`` declares them rather than
+    the order they were typed. The declaration order is the project's
+    and can matter: a lock compiled under a ``--constraint`` naming
+    another has to be written after it, and a selection that reordered
+    them would quietly compile against the previous run's constraints.
+
+    Each lock keeps the position it holds in the whole mapping, so that
+    the scratch path ``lock-deps-check`` compiles into is the same
+    whether or not the run was narrowed. A position that shifted with
+    the selection would have two differently-narrowed runs share a
+    scratch file whose name says nothing about which lock last wrote
+    it.
+
+    :param lock_files: The configured locks, mapped to their sources.
+    :param state: The tox session state holding the parsed options.
+    :returns: The selected locks, each with its position and sources.
+    :raises HandledError: If a name no configured lock answers to is given.
+    """
+    declared = [
+        (lock_index, lock_file, lock_inputs)
+        for lock_index, (lock_file, lock_inputs)
+        in enumerate(lock_files.items())
+    ]
+    names: list[str] = getattr(state.conf.options, _LOCK_FILE_CLI_DEST, [])
+    if not names:
+        return declared
+
+    # NOTE: Compared as paths rather than as the strings they arrived
+    # NOTE: as, so that a lock declared as `requirements/base.txt`
+    # NOTE: answers to `./requirements/base.txt` -- and, on Windows, to
+    # NOTE: the spelling with the separator that platform's shell
+    # NOTE: completes.
+    wanted = {Path(name) for name in names}
+    unknown = wanted.difference(lock_file for _, lock_file, _ in declared)
+    if unknown:
+        raise HandledError(
+            f'`{_LOCK_FILE_CLI_OPTION}` names '
+            f'{", ".join(sorted(map(str, unknown)))}, which `lock_files` '
+            f'does not declare. It declares '
+            f'{", ".join(map(str, lock_files))}. Selecting nothing rather '
+            f'than refusing would have `{_CHECK_ENV_NAME}` pass without '
+            f'having checked a single lock.',
+        )
+
+    return [entry for entry in declared if entry[1] in wanted]
 
 
 def _split_option(option: str) -> _c.Iterator[str]:
@@ -742,6 +827,25 @@ def _loader_rank(loader: Loader[object], env_name: str) -> int:
 
 
 @impl
+def tox_add_option(parser: ToxParser) -> None:
+    """Let one invocation name the locks it is about.
+
+    :param parser: The command-line parser tox is assembling.
+    """
+    parser.add_argument(
+        _LOCK_FILE_CLI_OPTION,
+        dest=_LOCK_FILE_CLI_DEST,
+        metavar='path',
+        action='append',
+        default=[],
+        help=(
+            'the lock to compile or check, as `lock_files` spells it; '
+            'repeatable, and every configured lock when left unsaid'
+        ),
+    )
+
+
+@impl
 def tox_extend_envs() -> _c.Iterable[str]:
     """Declare the dependency locking environments.
 
@@ -851,7 +955,8 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             'instead.',
         )
 
-    lock_summary = _lock_summary(lock_files)
+    selected_locks = _selected_lock_files(lock_files, state)
+    lock_summary = _lock_summary(selected_locks)
     pos_args = _lock_args(state)
     # NOTE: What the description renders is the command as this
     # NOTE: invocation will actually run it -- the project's own
@@ -882,7 +987,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             commands_pre=[],
             commands=[
                 _compile_command(core_conf, lock_inputs, lock_file, pos_args)
-                for lock_file, lock_inputs in lock_files.items()
+                for _, lock_file, lock_inputs in selected_locks
             ],
             # NOTE: `uv pip compile` writes one output per invocation,
             # NOTE: so a project with N locks gets N commands -- and tox
@@ -926,7 +1031,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     scratch_root = core_conf['temp_dir'] / _CHECK_ENV_NAME
     scratch_files = [
         scratch_root / str(lock_index) / lock_file.name
-        for lock_index, lock_file in enumerate(lock_files)
+        for lock_index, lock_file, _ in selected_locks
     ]
     # NOTE: The check env takes `[testenv:lock-deps]` as its base so
     # NOTE: that a project pinning the resolver, naming an interpreter
@@ -958,8 +1063,8 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                     str(lock_file),
                     str(scratch_file),
                 )
-                for lock_file, scratch_file in zip(
-                    lock_files,
+                for (_, lock_file, _), scratch_file in zip(
+                    selected_locks,
                     scratch_files,
                     strict=True,
                 )
@@ -972,15 +1077,15 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                         scratch_file,
                         pos_args,
                     )
-                    for (_, lock_inputs), scratch_file
-                    in zip(lock_files.items(), scratch_files, strict=True)
+                    for (_, _, lock_inputs), scratch_file
+                    in zip(selected_locks, scratch_files, strict=True)
                 ),
                 _python_script_command(
                     _CHECK_COMPARE_SCRIPT,
                     *(
                         str(path)
-                        for lock_file, scratch_file
-                        in zip(lock_files, scratch_files, strict=True)
+                        for (_, lock_file, _), scratch_file
+                        in zip(selected_locks, scratch_files, strict=True)
                         for path in (scratch_file, lock_file)
                     ),
                 ),
