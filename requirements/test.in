@@ -14,4 +14,13 @@ pytest
 pytest-cov
 pytest-subtests
 pytest-xdist
-tox [testing]
+# NOTE: v4.64.1 builds a real config-file loader for a section the
+# NOTE: file lacks when a `-x` override targets one, so an override
+# NOTE: aimed at `[testenv:lock-deps]` no longer reaches the seed
+# NOTE: loader that exists to carry it. The plugin still behaves the
+# NOTE: same -- its own workaround simply stops being reached, which
+# NOTE: the 100% gate reads as dead code. The declared floor is
+# NOTE: v4.55.1, so the workaround cannot just be deleted; deciding
+# NOTE: what replaces the gate is its own change. Until then the lock
+# NOTE: holds the last release the suite measures clean.
+tox [testing] < 4.64.1

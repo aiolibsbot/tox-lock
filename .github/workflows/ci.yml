@@ -76,8 +76,11 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    # NOTE: Alongside `tox` rather than into a `testenv`: the lock
+    # NOTE: envs only exist if the plugin is loaded by the `tox` being
+    # NOTE: run, and this job runs them directly rather than a suite.
+    - name: Install tox and the plugin it is about to run
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     # NOTE: The plugin locking its own dependencies is the only place
     # NOTE: either lock env runs against a real project rather than a
