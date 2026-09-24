@@ -245,6 +245,24 @@ only the lock is unique -- one `requirements/base.in` legitimately
 feeds both `base.txt` and `test.txt` above, and a mapping keyed the
 other way would silently drop one of them.
 
+`uv` reads the lock's *format* off its file name, so naming it is
+also how a project picks one. A lock called `pylock.toml` -- or
+`pylock.<name>.toml` -- is written as a [PEP 751] document; anything
+else is written as a `requirements.txt` one:
+
+```ini
+[tox]
+lock_files = pylock.toml = pyproject.toml
+```
+
+Both envs work the same way on either, `lock-deps-check` included: it
+compiles into a scratch file that keeps the lock's own name, so it
+produces the same format it is comparing against. There is no format
+setting here to keep in step with the file name, because there is
+nothing a format setting could say that the name does not.
+
+[PEP 751]: https://peps.python.org/pep-0751/
+
 Emptying the setting is refused rather than obeyed: it would leave
 `lock-deps` compiling nothing and `lock-deps-check` passing every time
 without having checked anything, which is a green CI job asserting

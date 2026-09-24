@@ -662,6 +662,17 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     # NOTE: `constraints/base.txt` would otherwise have the second
     # NOTE: compile overwrite the first's scratch and both comparisons
     # NOTE: read the same file.
+    #
+    # NOTE: The lock's own file name is kept rather than replaced by
+    # NOTE: something tidier, because `uv` reads the *format* off it:
+    # NOTE: an output named `pylock.toml` or `pylock.<name>.toml` is
+    # NOTE: written as a PEP 751 lock, anything else as a
+    # NOTE: `requirements.txt` one. A scratch named `lock.txt` would
+    # NOTE: therefore have the check compile a different format from
+    # NOTE: the one the writer produced, and the comparison would
+    # NOTE: report every line of a perfectly current lock as drift.
+    # NOTE: That inference is also why this plugin needs no setting for
+    # NOTE: the format: naming the lock picks it.
     scratch_root = core_conf['temp_dir'] / _CHECK_ENV_NAME
     scratch_files = [
         scratch_root / str(lock_index) / lock_file.name

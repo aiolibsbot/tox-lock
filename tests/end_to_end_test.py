@@ -93,6 +93,51 @@ def test_the_check_reports_the_pins_that_moved(
 
 
 @pytest.mark.network
+def test_a_pep_751_lock_is_written_and_accepted(
+    tox_project: ToxProjectCreator,
+    enable_pip_pypi_access: str | None,  # noqa: ARG001
+    subtests: SubTests,
+) -> None:
+    """Naming the lock ``pylock.toml`` is all a PEP 751 lock takes.
+
+    ``uv`` picks the output format off the file name, so the writer
+    produces a PEP 751 lock and the check -- compiling into a scratch
+    file that keeps that name -- produces one too and agrees with it.
+    Neither this plugin nor the project it runs in says the word
+    "format" anywhere.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param enable_pip_pypi_access: Tox-provided index-access opt-in.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\nlock_files = pylock.toml = pyproject.toml\n',
+        'pyproject.toml': _ZERO_DEP_PYPROJECT,
+    })
+
+    project.run('run', '-e', 'lock-deps').assert_success()
+
+    lock_file = project.path / 'pylock.toml'
+    lock_contents = lock_file.read_text(encoding='utf-8')
+    with subtests.test(msg='the lock is a PEP 751 document'):
+        assert 'lock-version = "1.0"' in lock_contents
+
+    with subtests.test(msg='the check accepts what was just written'):
+        project.run('run', '-e', 'lock-deps-check').assert_success()
+
+    lock_file.write_text(
+        lock_contents.replace('lock-version = "1.0"', 'lock-version = "1.1"'),
+        encoding='utf-8',
+    )
+    check_outcome = project.run('run', '-e', 'lock-deps-check')
+    with subtests.test(msg='an edited lock is reported as stale'):
+        check_outcome.assert_failed()
+        assert 'pylock.toml is out of date' in (
+            f'{check_outcome.out}{check_outcome.err}'
+        )
+
+
+@pytest.mark.network
 def test_several_locks_are_written_and_checked_together(
     tox_project: ToxProjectCreator,
     enable_pip_pypi_access: str | None,  # noqa: ARG001

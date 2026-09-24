@@ -826,6 +826,52 @@ def test_locks_sharing_a_name_get_scratch_files_of_their_own(
     assert len(scratch_outputs) == 2  # noqa: PLR2004
 
 
+@pytest.mark.parametrize(
+    'lock_file_name',
+    ('pylock.toml', 'pylock.dev.toml'),
+    ids=('the-plain-name', 'a-named-lock'),
+)
+def test_a_pep_751_lock_keeps_its_name_into_the_scratch_file(
+    tox_project: ToxProjectCreator,
+    lock_file_name: str,
+    subtests: SubTests,
+) -> None:
+    """Naming the lock is the whole of asking for a PEP 751 one.
+
+    ``uv`` reads the output format off the file name -- ``pylock.toml``
+    and ``pylock.<name>.toml`` are written as PEP 751 locks, everything
+    else as ``requirements.txt`` ones -- so a project gets one by
+    naming it, with no option and no setting of this plugin's own. The
+    check env has to compile into a scratch file carrying that same
+    name, or it would produce a ``requirements.txt`` lock to compare
+    against a PEP 751 one and report every line of a current lock as
+    drift.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param lock_file_name: The PEP 751 lock name under test.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': f'[tox]\nlock_files = {lock_file_name} = pyproject.toml\n',
+    })
+
+    expected_envs = {
+        'lock-deps': f'--output-file {lock_file_name}',
+        'lock-deps-check': f'{lock_file_name} pyproject.toml',
+    }
+    for env_name, expected_argument in expected_envs.items():
+        tox_invocation_result = project.run(
+            'config',
+            '-e',
+            env_name,
+            '-k',
+            'commands',
+        )
+        tox_invocation_result.assert_success()
+        with subtests.test(msg=env_name):
+            assert expected_argument in tox_invocation_result.out
+
+
 def test_locking_nothing_is_refused_rather_than_seeded(
     tox_project: ToxProjectCreator,
     subtests: SubTests,
