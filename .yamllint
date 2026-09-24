@@ -22,5 +22,11 @@ rules:
   line-length:
     # NOTE: The width the rest of the tree is written to.
     max: 79
+    # NOTE: A `uses:` pinned to a commit is forty characters of digest
+    # NOTE: with nowhere to wrap, and there is no shorter way to say
+    # NOTE: which commit. The allowance is the rule's own: a value that
+    # NOTE: is a single unbreakable word is let past the limit, while
+    # NOTE: prose -- which could have been wrapped -- still is not.
+    allow-non-breakable-inline-mappings: true
 
 ...

@@ -41,7 +41,12 @@ jobs:
     # NOTE: linters and the lock check had all passed judgement on a
     # NOTE: different copy of -- and `verify-dists` in particular exists
     # NOTE: to say what is inside the archive that ships.
-    uses: ./.github/workflows/ci.yml
+    # NOTE: `zizmor` prefers `$/...` here, which resolves to this
+    # NOTE: repository without naming it. Both spellings are
+    # NOTE: relative to the same place and neither can be
+    # NOTE: redirected; `./` is what the reuse was rehearsed with
+    # NOTE: and what a reader of GitHub's own docs meets first.
+    uses: ./.github/workflows/ci.yml  # zizmor: ignore[self-repository]
     permissions:
       contents: read
 
@@ -50,6 +55,7 @@ jobs:
     needs: ci
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     # NOTE: An environment so that the trusted publisher on PyPI can be
     # NOTE: scoped to it, and so that a maintainer may put a required
@@ -69,13 +75,15 @@ jobs:
     # NOTE: By id, not by name: the id comes from the very upload step
     # NOTE: that produced it, so this download cannot quietly start
     # NOTE: meaning a different artifact than the one CI built.
-    - uses: actions/download-artifact@v4
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
         artifact-ids: ${{ needs.ci.outputs.dists-artifact-id }}
         path: dist/
         merge-multiple: true
 
-    - uses: pypa/gh-action-pypi-publish@release/v1
+    # v1.14.2
+    - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
 
   github-release:
     name: 🏷️ Publish a GitHub Release
@@ -87,13 +95,15 @@ jobs:
     - ci
     - publish-to-pypi
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     permissions:
       # NOTE: To create the release. Nothing here pushes a commit.
       contents: write
 
     steps:
-    - uses: actions/download-artifact@v4
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
         artifact-ids: ${{ needs.ci.outputs.dists-artifact-id }}
         path: dist/
@@ -105,10 +115,19 @@ jobs:
     - name: Create the release and attach the dists to it
       env:
         GH_TOKEN: ${{ github.token }}
+        # NOTE: Through the environment rather than interpolated into
+        # NOTE: the command: a `${{ }}` in a `run` block is pasted in
+        # NOTE: as text before the shell ever sees it, so a ref name
+        # NOTE: carrying a quote would be running the rest of itself.
+        # NOTE: Tag names are constrained, and whoever pushes one here
+        # NOTE: already holds write -- which makes this a habit worth
+        # NOTE: keeping rather than a hole worth patching.
+        RELEASE_TAG: ${{ github.ref_name }}
+        RELEASE_REPO: ${{ github.repository }}
       run: >-
-        gh release create '${{ github.ref_name }}'
-        --repo '${{ github.repository }}'
-        --title '${{ github.ref_name }}'
+        gh release create "${RELEASE_TAG}"
+        --repo "${RELEASE_REPO}"
+        --title "${RELEASE_TAG}"
         --generate-notes
         --verify-tag
         dist/*

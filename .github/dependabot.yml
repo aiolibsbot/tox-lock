@@ -1,0 +1,28 @@
+---
+
+# NOTE: Actions only. The Python dependencies under `requirements/` are
+# NOTE: locked by this project's own plugin, and `lock-deps` moving a
+# NOTE: pin is a different mechanism from a bot opening a pull request
+# NOTE: per package -- two of them bumping the same files would each
+# NOTE: undo the other.
+#
+# NOTE: This is what keeps the commit pins in the workflows from being
+# NOTE: frozen rather than merely fixed. Pinning without a bumper trades
+# NOTE: a supply-chain risk for a staleness one; the pair is the point.
+
+version: 2
+
+updates:
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  groups:
+    # NOTE: One pull request rather than one per action. These move
+    # together in practice and each bump is a digest nobody reads
+    # individually.
+    actions:
+      patterns:
+      - '*'
+
+...
