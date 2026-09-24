@@ -6,6 +6,7 @@ import os
 import sys
 import typing as _t
 from importlib.metadata import version as _installed_version
+from pathlib import Path
 
 import pytest
 from packaging.version import Version
@@ -2401,3 +2402,247 @@ def test_an_unknown_lock_file_is_refused(
             assert (
                 _native_paths(expected_text) in tox_invocation_result.out
             )
+
+
+_PER_LOCK_OPTION_INI = (
+    '[tox]\n'
+    'lock_files =\n'
+    '  requirements/base.txt = pyproject.toml\n'
+    '  requirements/test.txt = pyproject.toml\n'
+    'lock_file_options =\n'
+    '  requirements/test.txt = --extra test\n'
+)
+
+_PER_LOCK_OPTION_TOML = (
+    'lock_files = { "requirements/base.txt" = ["pyproject.toml"], '
+    '"requirements/test.txt" = ["pyproject.toml"] }\n'
+    'lock_file_options = { "requirements/test.txt" = ["--extra test"] }\n'
+)
+
+
+def _options_by_lock(rendered_commands: str) -> dict[str, str]:
+    """Split rendered ``commands`` into the options each lock gets.
+
+    :param rendered_commands: The ``tox config -k commands`` output.
+    :returns: Each compiled file's name, mapped to its whole command.
+    """
+    return {
+        Path(line.split('--output-file')[1].split()[0]).name: line
+        for line in rendered_commands.splitlines()
+        if '--output-file' in line
+    }
+
+
+@pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
+@pytest.mark.parametrize(
+    'config_files',
+    (
+        pytest.param({'tox.ini': _PER_LOCK_OPTION_INI}, id='ini'),
+        pytest.param({'tox.toml': _PER_LOCK_OPTION_TOML}, id='toml'),
+    ),
+)
+def test_lock_file_options_apply_to_one_lock_alone(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    env_name: str,
+    subtests: SubTests,
+) -> None:
+    """An option named for one lock is not compiled into the others.
+
+    ``lock_options`` says how a project resolves and every lock wants
+    it; this says what one lock *is*. Leaking an entry of it into the
+    rest is how ``--extra test`` puts the test dependencies into the
+    lock a deployment installs from.
+
+    Both envs read it, because they have to agree: an option the
+    writer used and the checker did not have it reports drift that
+    running the writer again cannot settle.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param env_name: The seeded env whose command is inspected.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        env_name,
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+
+    commands = _options_by_lock(tox_invocation_result.out)
+    with subtests.test(msg='the lock it was named for gets it'):
+        assert '--extra test' in commands['test.txt']
+
+    with subtests.test(msg='no other lock does'):
+        assert '--extra test' not in commands['base.txt']
+
+
+def test_a_lock_can_decline_a_seeded_default_for_itself(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """One lock declining a seed leaves it in place for the rest.
+
+    A single unhashable dependency -- a direct URL, an editable
+    checkout -- belongs to the one lock that names it, and used to cost
+    the whole project its hash pinning.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            '  requirements/base.txt = pyproject.toml\n'
+            '  requirements/test.txt = pyproject.toml\n'
+            'lock_file_options =\n'
+            '  requirements/test.txt = --no-generate-hashes\n'
+        ),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+
+    commands = _options_by_lock(tox_invocation_result.out)
+    expectations = {
+        'the declining lock is not hash-pinned':
+            '--generate-hashes' not in commands['test.txt'],
+        'it says so in uv own spelling':
+            '--no-generate-hashes' in commands['test.txt'],
+        'every other lock still is':
+            '--generate-hashes' in commands['base.txt'],
+    }
+    for message, expectation in expectations.items():
+        with subtests.test(msg=message):
+            assert expectation
+
+
+def test_lock_file_options_trail_the_project_wide_ones(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """The narrower say comes last on the command line.
+
+    ``uv`` accumulates the options it lets repeat in the order they are
+    given, so a lock adding to what the project already asked for has
+    to be read after it.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            '  requirements/base.txt = pyproject.toml\n'
+            'lock_options = --extra docs\n'
+            'lock_file_options =\n'
+            '  requirements/base.txt = --extra test\n'
+        ),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+    assert '--extra docs --extra test' in tox_invocation_result.out
+
+
+def test_lock_file_options_are_shown_in_the_env_description(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """``tox list`` says which lock is compiled differently.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': _PER_LOCK_OPTION_INI})
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+
+    expectations = {
+        'the lock with options of its own names them': _native_paths(
+            'requirements/test.txt out of pyproject.toml with --extra test',
+        ) in tox_invocation_result.out,
+        'the one without them does not': _native_paths(
+            'requirements/base.txt out of pyproject.toml;',
+        ) in tox_invocation_result.out,
+    }
+    for message, expectation in expectations.items():
+        with subtests.test(msg=message):
+            assert expectation
+
+
+def test_options_for_an_undeclared_lock_are_refused(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """Options named for a lock that does not exist fail the run.
+
+    Dropping them instead would leave the lock they were meant for
+    compiled without them, and the run those two settings disagree in
+    exiting zero.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            _SEVERAL_LOCKS
+            + 'lock_file_options =\n'
+            '  requirements/dev.txt = --extra test\n'
+        ),
+    })
+    tox_invocation_result = project.run('list')
+
+    with subtests.test(msg='the run fails'):
+        assert tox_invocation_result.code != 0
+
+    for expected_text in (
+        '`lock_file_options`',
+        'requirements/dev.txt',
+        'does not declare',
+        'requirements/base.txt',
+    ):
+        with subtests.test(msg=f'the message names {expected_text}'):
+            assert _native_paths(expected_text) in tox_invocation_result.out
+
+
+def test_a_lock_answers_to_an_equivalent_path_spelling(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Options are matched as a path, not as the string typed.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': (
+            _SEVERAL_LOCKS
+            + 'lock_file_options =\n'
+            '  ./requirements/test.txt = --extra test\n'
+        ),
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+    )
+    tox_invocation_result.assert_success()
+
+    commands = _options_by_lock(tox_invocation_result.out)
+    assert '--extra test' in commands['test.txt']

@@ -80,6 +80,29 @@ _LOCK_COMMAND_PREFIX = (
 # NOTE: the config file naming them is read from.
 _DEFAULT_LOCK_FILES = {Path('requirements.txt'): [Path('pyproject.toml')]}
 
+# NOTE: Keyed by the lock, like `lock_files` and for the same reason:
+# NOTE: what an option applies to is one lock, and the sources are not
+# NOTE: unique enough to name it -- `pyproject.toml` compiled once
+# NOTE: plainly and once under `--extra test` is the ordinary two-lock
+# NOTE: project, and both entries name the same source.
+#
+# NOTE: Separate from `lock_options` rather than a richer spelling of
+# NOTE: it, because the two say different things: `lock_options` is how
+# NOTE: this project resolves -- `--universal`, `--no-annotate`, the
+# NOTE: index style -- and every lock wants it. This is what *one* lock
+# NOTE: is, and an entry of it leaking into the others is how
+# NOTE: `--extra test` puts `pytest` in the lock a deployment installs
+# NOTE: from.
+#
+# NOTE: Without it the smallest thing a per-lock option can be said in
+# NOTE: is an invocation: `--lock-file test.txt -- --extra test`. That
+# NOTE: writes the right lock and leaves `lock-deps-check` recompiling
+# NOTE: it without the option for ever after, so the check reports
+# NOTE: drift that a plain `tox run -e lock-deps` then "fixes" by
+# NOTE: throwing the extra away. A setting the checker reads too is the
+# NOTE: only spelling both envs can agree on.
+_DEFAULT_LOCK_FILE_OPTIONS: dict[Path, list[str]] = {}
+
 # NOTE: A command-line option rather than a core setting, because it
 # NOTE: does not say anything about the project -- `lock_files` already
 # NOTE: does that. It says which of the locks a project has one
@@ -388,14 +411,26 @@ class _DefaultSeedLoader(_SeedLoader):
     """
 
 
-def _lock_summary(selected_locks: _c.Sequence[_SelectedLock]) -> str:
-    """Spell out which sources each selected lock is compiled from.
+def _lock_summary(
+    core_conf: ConfigSet,
+    selected_locks: _c.Sequence[_SelectedLock],
+) -> str:
+    """Spell out how each selected lock is compiled.
 
+    A lock's own options are named beside its sources rather than in
+    the sentence around the summary, which has only one place to put
+    the options and so could only render them for a project where
+    every lock is compiled alike.
+
+    :param core_conf: The core tox configuration set to read from.
     :param selected_locks: The locks this run is about, with their sources.
     :returns: A human-readable rendering of the selection.
     """
     return '; '.join(
         f'{lock_file} out of {", ".join(map(str, lock_inputs))}'
+        + (f' with {options}' if (options := ' '.join(
+            _lock_file_options(core_conf, lock_file),
+        )) else '')
         for _, lock_file, lock_inputs in selected_locks
     )
 
@@ -495,6 +530,23 @@ def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
     :yields: The lock options, one command argument at a time.
     """
     for option in core_conf['lock_options']:
+        yield from _split_option(option)
+
+
+def _lock_file_options(
+    core_conf: ConfigSet,
+    lock_file: Path,
+) -> _c.Iterator[str]:
+    """Split one lock's own options into command arguments.
+
+    Split exactly as ``lock_options`` is, so that an option reads the
+    same whichever of the two settings a project ends up putting it in.
+
+    :param core_conf: The core tox configuration set to read from.
+    :param lock_file: The lock whose own options are wanted.
+    :yields: That lock's options, one command argument at a time.
+    """
+    for option in core_conf['lock_file_options'].get(lock_file, ()):
         yield from _split_option(option)
 
 
@@ -700,13 +752,20 @@ def _python_version_option(
 
 def _compile_command(
     core_conf: ConfigSet,
+    lock_file: Path,
     lock_inputs: _c.Sequence[Path],
     output_file: Path,
     pos_args: tuple[str, ...],
 ) -> Command:
     """Build the ``uv pip compile`` invocation writing a given lock.
 
+    The lock is named apart from the path being written because the
+    check env compiles into a scratch file: what the options are looked
+    up under is the lock the project configured, not the file this
+    particular invocation happens to produce.
+
     :param core_conf: The core tox configuration set to read from.
+    :param lock_file: The configured lock whose options apply.
     :param lock_inputs: The requirement sources compiled into the lock.
     :param output_file: The path the compiled lock is written to.
     :param pos_args: The arguments the user passed after ``--``.
@@ -724,7 +783,15 @@ def _compile_command(
     # NOTE: which is the argument that makes the check a check, and it
     # NOTE: withdraws its own header default the moment a project names
     # NOTE: one.
-    user_options = list(_lock_options(core_conf))
+    # NOTE: Trailing the project-wide ones so that an option `uv` lets
+    # NOTE: repeat accumulates with the narrower say last -- and so
+    # NOTE: that a lock declining a seed the rest of the project takes,
+    # NOTE: `--no-generate-hashes` on the one lock with a direct URL in
+    # NOTE: it, is read the same way a project-wide decline is.
+    user_options = [
+        *_lock_options(core_conf),
+        *_lock_file_options(core_conf, lock_file),
+    ]
     _reject_configured_output_file(user_options, pos_args)
     user_args = (*user_options, *pos_args)
     return Command([
@@ -944,6 +1011,15 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             'the extra `uv pip compile` options `tox-lock` locks with'
         ),
     )
+    core_conf.add_config(
+        'lock_file_options',
+        of_type=dict[Path, list[str]],
+        default=dict(_DEFAULT_LOCK_FILE_OPTIONS),
+        desc=(
+            'the extra `uv pip compile` options one lock alone is compiled '
+            'with, mapped to that lock'
+        ),
+    )
 
     lock_files = core_conf['lock_files']
     if not lock_files:
@@ -955,8 +1031,24 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             'instead.',
         )
 
+    # NOTE: A key no lock answers to is refused rather than ignored,
+    # NOTE: the way `--lock-file` refuses one. Ignoring it is the worse
+    # NOTE: half of the pair: the option the project wrote goes
+    # NOTE: nowhere, the lock it was meant for compiles without it, and
+    # NOTE: the run those two settings disagree in exits zero.
+    undeclared = set(core_conf['lock_file_options']).difference(lock_files)
+    if undeclared:
+        raise HandledError(
+            f'`lock_file_options` names '
+            f'{", ".join(sorted(map(str, undeclared)))}, which `lock_files` '
+            f'does not declare. It declares '
+            f'{", ".join(map(str, lock_files))}. Options named for a lock '
+            f'that does not exist would be dropped in silence, and the '
+            f'lock they were meant for compiled without them.',
+        )
+
     selected_locks = _selected_lock_files(lock_files, state)
-    lock_summary = _lock_summary(selected_locks)
+    lock_summary = _lock_summary(core_conf, selected_locks)
     pos_args = _lock_args(state)
     # NOTE: What the description renders is the command as this
     # NOTE: invocation will actually run it -- the project's own
@@ -977,7 +1069,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Compile {lock_summary} using `uv pip compile '
+                f'[tox-lock] Compile {lock_summary}, using `uv pip compile '
                 f'{described_options}`; pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
@@ -986,7 +1078,13 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             deps=list(_LOCK_UV),
             commands_pre=[],
             commands=[
-                _compile_command(core_conf, lock_inputs, lock_file, pos_args)
+                _compile_command(
+                    core_conf,
+                    lock_file,
+                    lock_inputs,
+                    lock_file,
+                    pos_args,
+                )
                 for _, lock_file, lock_inputs in selected_locks
             ],
             # NOTE: `uv pip compile` writes one output per invocation,
@@ -1073,11 +1171,12 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 *(
                     _compile_command(
                         core_conf,
+                        lock_file,
                         lock_inputs,
                         scratch_file,
                         pos_args,
                     )
-                    for (_, _, lock_inputs), scratch_file
+                    for (_, lock_file, lock_inputs), scratch_file
                     in zip(selected_locks, scratch_files, strict=True)
                 ),
                 _python_script_command(
