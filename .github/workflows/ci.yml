@@ -6,9 +6,24 @@ on:  # yamllint disable-line rule:truthy
   push:
   pull_request:
   workflow_dispatch:
+  # NOTE: Called by the release workflow so that a tag publishes the
+  # NOTE: dists this suite has already accepted, rather than a second
+  # NOTE: build of its own that nothing ran the matrix against.
+  workflow_call:
+    outputs:
+      dists-artifact-id:
+        description: The id of the artifact holding the built dists
+        value: ${{ jobs.dists.outputs.artifact-id }}
 
 env:
   FORCE_COLOR: 1
+
+# NOTE: Every job here reads the repository and writes nothing back.
+# NOTE: Spelled out because this workflow is also called by the one that
+# NOTE: publishes: a reusable workflow cannot be granted more than its
+# NOTE: caller holds, and the caller has to know what to grant.
+permissions:
+  contents: read
 
 jobs:
 
@@ -172,6 +187,14 @@ jobs:
   dists:
     name: 📦 Build & check dists
     runs-on: ubuntu-latest
+    # NOTE: The artifact is published by *id* rather than by name so
+    # NOTE: that the release workflow downloading it shares this job's
+    # NOTE: own idea of which upload it means. A name repeated in the
+    # NOTE: other file would be a literal in two places whose drift
+    # NOTE: surfaces at the one moment nobody wants a red build: on the
+    # NOTE: tag, after the dists are already built.
+    outputs:
+      artifact-id: ${{ steps.upload-dists.outputs.artifact-id }}
 
     steps:
     - uses: actions/checkout@v4
@@ -201,6 +224,7 @@ jobs:
           'import tox_plugins.lock._plugin as p; print(p.__file__)'
 
     - uses: actions/upload-artifact@v4
+      id: upload-dists
       with:
         name: dists
         path: dist/

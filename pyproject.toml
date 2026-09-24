@@ -67,6 +67,15 @@ dynamic = [
   "version",
 ]
 
+# NOTE: The sidebar of the project page on PyPI, which is where somebody
+# NOTE: who found the plugin through its dist rather than through this
+# NOTE: repository goes looking for the source and the issue tracker.
+# NOTE: Without these the page names neither.
+[project.urls]
+Homepage = "https://github.com/tox-dev/tox-lock"
+Source = "https://github.com/tox-dev/tox-lock"
+"Issue tracker" = "https://github.com/tox-dev/tox-lock/issues"
+
 [project.entry-points.tox]
 tox-lock = "tox_plugins.lock._plugin"
 
