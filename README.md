@@ -291,25 +291,33 @@ setting instead.
 The resolver itself is an input to the lock as much as the sources
 are: two `uv` releases can pin the same requirements differently, and
 a check running a newer `uv` than the machine that wrote the lock
-reports drift that is not there. Projects that would rather decide
-when that happens pin it once, for both envs:
+reports drift that is not there. So is the interpreter -- `uv pip
+compile` resolves for the Python it runs under, and the same sources
+compiled on 3.11 and on 3.13 legitimately differ. Both are settled in
+the env's own section, and the check env inherits them:
 
 ```ini
-[tox]
-lock_uv = uv == 0.9.2
+[testenv:lock-deps]
+deps = uv == 0.9.2
+base_python = py312
 ```
 
-The interpreter is an input of the same kind. `uv pip compile`
-resolves for the Python it runs under, so the same sources compiled on
-3.11 and on 3.13 legitimately differ, and a check run under one while
-the lock was written under the other reports drift that is not there.
-Left unset, both envs use whichever Python is running `tox`; naming it
-fixes both at once:
+That is stock tox configuration, not a setting this plugin invented:
+`lock-deps-check` takes `[testenv:lock-deps]` as its
+[`base`](https://tox.wiki/en/stable/config.html#base), so anything a
+project sets on the env it thinks of as "the lock env" -- the
+resolver, the interpreter, `set_env`, `pass_env` -- is set for the
+check as well. `base` is not chained in tox, so `[testenv]` stays out
+of both regardless. What the plugin owns is not inherited: the
+commands, the description and the labels telling the two envs apart
+stay as seeded however the writer is configured, and the check env's
+own `[testenv:lock-deps-check]` section still has the last word over
+both.
 
-```ini
-[tox]
-lock_python = py312
-```
+One thing does not follow the inheritance: a `-x` override. `-x
+testenv:lock-deps.deps=uv==0.9.4` reaches the writer alone, because
+the check env inherits a config *section* and an override is not one.
+Run both envs off a one-off pin and the pin needs naming twice.
 
 `uv` reads its own configuration -- the index to resolve against,
 how to authenticate to it, which certificates to trust -- out of the
@@ -327,23 +335,28 @@ lock_pass_env = MY_INDEX_TOKEN
 That setting adds to `UV_*` rather than replacing it, the way
 `pass_env` adds to tox's own defaults.
 
-The labels are settable too, one key per env -- renamed to fit a
-project's existing scheme, or emptied to opt out of labelling
+The labels are settable too, in each env's own section -- renamed to
+fit a project's existing scheme, or emptied to opt out of labelling
 altogether:
 
 ```ini
-[tox]
-lock_labels = pins
-lock_check_labels = pins-audit
+[testenv:lock-deps]
+labels = pins
+
+[testenv:lock-deps-check]
+labels = pins-audit
 ```
 
-They are separate keys rather than one so that a project can label the
-check for CI without labelling the writer, or the other way round. A
-project that would rather have them as one group is free to say so by
-giving both keys the same value -- that choice is just not the default.
+Labels are the one env setting deliberately left out of the
+inheritance above: a single label over a writer and a check selects a
+pair whose second half is made vacuous by its first, and under `tox
+run-parallel` the writer rewrites the very file the check is reading.
+A project that wants them as one group says so by naming the same
+label in both sections -- that choice is just not the default.
 
-Substitutions work in all of them, as in any other core setting -- for
-instance, `lock_files = {env:LOCK_FILE:requirements.txt} = pyproject.toml`.
+Substitutions work in all of these, core settings and env sections
+alike -- for instance, `lock_files = {env:LOCK_FILE:requirements.txt}
+= pyproject.toml`.
 
 One-off options do not need a config change at all -- pass them after
 `--`, where they are appended last. `uv` accumulates the options it
@@ -355,12 +368,14 @@ with on the command line.
 Both envs read the same settings for what the lock is made of, so a
 project configures its lock once and the check follows.
 
-The plugin's defaults sit between the `[testenv]` base section and
-your own env section: `[testenv]` settings never leak into this env,
-while anything set in `[testenv:lock-deps]` (`[env.lock-deps]` in
-`tox.toml`) wins, as does `-x testenv:lock-deps.<key>=...` -- whether
-or not the project declares that section at all. Keys left unset keep
-the plugin's defaults:
+The plugin's settings sit either side of your own env section, by what
+they are. What it owns -- the commands, the labels, the description --
+outranks the section it inherits; what it merely defaults -- the
+resolver, the interpreter, the environment to pass -- falls below it.
+Either way, `[testenv]` never leaks in, an `[testenv:lock-deps]`
+section wins the keys it names, and `-x testenv:lock-deps.<key>=...`
+wins over both -- whether or not the project declares that section at
+all. Keys left unset keep the plugin's defaults:
 
 ```ini
 [testenv:lock-deps]

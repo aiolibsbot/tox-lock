@@ -855,17 +855,21 @@ def test_locking_nothing_is_refused_rather_than_seeded(
     (
         pytest.param({'tox.ini': '[tox]\n'}, 'uv', id='defaults-to-uv'),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_uv = uv == 0.9.2\n'},
+            {'tox.ini': '[tox]\n[testenv:lock-deps]\ndeps = uv == 0.9.2\n'},
             'uv == 0.9.2',
-            id='ini-pinned',
+            id='ini-pinned-on-the-writer',
         ),
         pytest.param(
-            {'tox.toml': 'lock_uv = ["uv == 0.9.2"]\n'},
+            {'tox.toml': '[env.lock-deps]\ndeps = ["uv == 0.9.2"]\n'},
             'uv == 0.9.2',
-            id='toml-pinned',
+            id='toml-pinned-on-the-writer',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_uv = uv == {env:UV_PIN:0.9.3}\n'},
+            {
+                'tox.ini':
+                '[tox]\n[testenv:lock-deps]\n'
+                'deps = uv == {env:UV_PIN:0.9.3}\n',
+            },
             'uv == 0.9.3',
             id='substitutions-are-expanded',
         ),
@@ -877,18 +881,22 @@ def test_locking_nothing_is_refused_rather_than_seeded(
     ),
 )
 @pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
-def test_lock_uv_is_configurable_for_both_envs(
+def test_the_resolver_is_pinned_once_for_both_envs(
     *,
     tox_project: ToxProjectCreator,
     config_files: dict[str, str],
     expected_deps: str,
     env_name: str,
 ) -> None:
-    """One core setting pins the ``uv`` both envs are run with.
+    """Pinning ``uv`` on the writer env pins it for the check env too.
+
+    Two ``uv`` releases may pin the same requirements differently, so a
+    check resolving with one while the lock was written with another
+    reports drift that is not there.
 
     :param tox_project: Tox-provided project factory fixture.
     :param config_files: The tox config files to create in the project.
-    :param expected_deps: The dependency the env must end up with.
+    :param expected_deps: The dependency both envs must end up with.
     :param env_name: The seeded env whose ``deps`` are inspected.
     """
     project = tox_project(config_files)
@@ -903,60 +911,73 @@ def test_lock_uv_is_configurable_for_both_envs(
     assert f'deps = {expected_deps}' in tox_invocation_result.out
 
 
-def test_lock_uv_does_not_leak_across_the_seeded_envs(
+def test_the_check_env_may_still_pin_its_own_resolver(
     tox_project: ToxProjectCreator,
 ) -> None:
-    """Overriding one env's ``uv`` leaves the other one alone.
+    """A check env section outranks the writer env it inherits from.
 
     :param tox_project: Tox-provided project factory fixture.
     """
-    project = tox_project({'tox.ini': '[tox]\nlock_uv = uv == 0.9.2\n'})
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            '[testenv:lock-deps]\n'
+            'deps = uv == 0.9.2\n'
+            '[testenv:lock-deps-check]\n'
+            'deps = uv == 0.9.9\n'
+        ),
+    })
     tox_invocation_result = project.run(
         'config',
         '-e',
-        'lock-deps',
+        'lock-deps-check',
         '-k',
         'deps',
-        '-x',
-        'testenv:lock-deps.deps=uv==0.9.4',
     )
     tox_invocation_result.assert_success()
-    assert 'deps = uv==0.9.4' in tox_invocation_result.out
+    assert 'deps = uv == 0.9.9' in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
     ('config_files', 'expected_base_python'),
     (
         pytest.param(
-            {'tox.ini': '[tox]\nlock_python = py312\n'},
+            {'tox.ini': '[tox]\n[testenv:lock-deps]\nbase_python = py312\n'},
             'py312',
-            id='ini-pinned',
+            id='ini-named-on-the-writer',
         ),
         pytest.param(
-            {'tox.toml': 'lock_python = ["py312"]\n'},
+            {'tox.toml': '[env.lock-deps]\nbase_python = ["py312"]\n'},
             'py312',
-            id='toml-pinned',
+            id='toml-named-on-the-writer',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_python = py3{env:PY_MINOR:12}\n'},
+            {
+                'tox.ini':
+                '[tox]\n[testenv:lock-deps]\n'
+                'base_python = py3{env:PY_MINOR:12}\n',
+            },
             'py312',
             id='substitutions-are-expanded',
         ),
     ),
 )
 @pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
-def test_lock_python_is_configurable_for_both_envs(
+def test_the_interpreter_is_named_once_for_both_envs(
     *,
     tox_project: ToxProjectCreator,
     config_files: dict[str, str],
     expected_base_python: str,
     env_name: str,
 ) -> None:
-    """One core setting names the interpreter both envs resolve under.
+    """Naming the writer env's interpreter names the check env's as well.
+
+    ``uv pip compile`` resolves for the Python it runs under, so the
+    same sources compiled on 3.11 and on 3.13 legitimately differ.
 
     :param tox_project: Tox-provided project factory fixture.
     :param config_files: The tox config files to create in the project.
-    :param expected_base_python: The interpreter the env must end up with.
+    :param expected_base_python: The interpreter both envs must end up with.
     :param env_name: The seeded env whose ``base_python`` is inspected.
     """
     project = tox_project(config_files)
@@ -982,7 +1003,7 @@ def test_lock_python_is_configurable_for_both_envs(
     ),
 )
 @pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))
-def test_unset_lock_python_leaves_the_tox_default_alone(
+def test_an_unnamed_interpreter_is_left_to_tox(
     *,
     tox_project: ToxProjectCreator,
     config_files: dict[str, str],
@@ -1006,25 +1027,95 @@ def test_unset_lock_python_leaves_the_tox_default_alone(
     assert f'base_python = {sys.executable}' in tox_invocation_result.out
 
 
-def test_lock_python_does_not_leak_across_the_seeded_envs(
+@pytest.mark.parametrize(
+    ('config_key', 'user_value'),
+    (
+        pytest.param('commands', 'echo hi', id='commands'),
+        pytest.param('commands_pre', 'echo hi', id='commands_pre'),
+        pytest.param('commands_post', 'echo hi', id='commands_post'),
+        pytest.param('description', 'hi', id='description'),
+        pytest.param('labels', 'hi', id='labels'),
+        pytest.param('package', 'wheel', id='package'),
+    ),
+)
+def test_the_writer_env_settings_the_plugin_owns_stay_behind(
+    *,
     tox_project: ToxProjectCreator,
+    config_key: str,
+    user_value: str,
 ) -> None:
-    """Overriding one env's interpreter leaves the other one alone.
+    """What the plugin owns on the writer does not reach the check env.
+
+    The check env inherits the writer's section so that a project
+    configures the two alike where it matters -- the resolver, the
+    interpreter, the environment. What makes the two envs *different*
+    must not come along: a project rewriting the writer's commands
+    would otherwise have the check env run them instead of checking
+    anything.
 
     :param tox_project: Tox-provided project factory fixture.
+    :param config_key: The env setting written on the writer env.
+    :param user_value: The value written there.
     """
-    project = tox_project({'tox.ini': '[tox]\nlock_python = py312\n'})
+    project = tox_project({
+        'tox.ini':
+        f'[tox]\n[testenv:lock-deps]\n{config_key} = {user_value}\n',
+    })
     tox_invocation_result = project.run(
         'config',
         '-e',
-        'lock-deps',
+        'lock-deps-check',
         '-k',
-        'base_python',
-        '-x',
-        'testenv:lock-deps.base_python=py311',
+        config_key,
     )
     tox_invocation_result.assert_success()
-    assert 'base_python = py311' in tox_invocation_result.out
+    assert f'{config_key} = {user_value}' not in tox_invocation_result.out
+
+
+@pytest.mark.parametrize(
+    'config_files',
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\n[testenv]\ndeps = pytest\n'},
+            id='ini-without-a-writer-section',
+        ),
+        pytest.param(
+            {
+                'tox.ini':
+                '[tox]\n[testenv]\ndeps = pytest\n[testenv:lock-deps]\n',
+            },
+            id='ini-through-a-writer-section',
+        ),
+        pytest.param(
+            {'tox.toml': '[env_run_base]\ndeps = ["pytest"]\n'},
+            id='toml-without-a-writer-table',
+        ),
+    ),
+)
+def test_the_generic_env_does_not_reach_the_check_env(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+) -> None:
+    """Inheriting the writer env does not drag ``[testenv]`` along.
+
+    tox does not chain ``base`` through the section it names, which is
+    what keeps the check env off a project's generic test settings even
+    though the writer env it inherits from sits under them.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps-check',
+        '-k',
+        'deps',
+    )
+    tox_invocation_result.assert_success()
+    assert 'pytest' not in tox_invocation_result.out
 
 
 @pytest.mark.parametrize(
@@ -1062,31 +1153,32 @@ def test_lock_python_does_not_leak_across_the_seeded_envs(
             id='core-less-config-check',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_labels = pins\n'},
+            {'tox.ini': '[tox]\n[testenv:lock-deps]\nlabels = pins\n'},
             'pins',
             ['lock-deps'],
-            id='ini-configured',
+            id='ini-renamed-on-the-writer',
         ),
         pytest.param(
-            {'tox.ini': '[tox]\nlock_check_labels = pins-audit\n'},
+            {
+                'tox.ini':
+                '[tox]\n[testenv:lock-deps-check]\nlabels = pins-audit\n',
+            },
             'pins-audit',
             ['lock-deps-check'],
-            id='ini-configured-check',
+            id='ini-renamed-on-the-checker',
         ),
         pytest.param(
-            {'tox.toml': 'lock_labels = ["pins"]\n'},
+            {'tox.toml': '[env.lock-deps]\nlabels = ["pins"]\n'},
             'pins',
             ['lock-deps'],
-            id='toml-configured',
+            id='toml-renamed-on-the-writer',
         ),
         pytest.param(
-            {'tox.toml': 'lock_check_labels = ["pins-audit"]\n'},
-            'pins-audit',
-            ['lock-deps-check'],
-            id='toml-configured-check',
-        ),
-        pytest.param(
-            {'tox.ini': '[tox]\nlock_labels = {env:LOCK_LABEL:pins}\n'},
+            {
+                'tox.ini':
+                '[tox]\n[testenv:lock-deps]\n'
+                'labels = {env:LOCK_LABEL:pins}\n',
+            },
             'pins',
             ['lock-deps'],
             id='substitutions-are-expanded',
@@ -1094,14 +1186,10 @@ def test_lock_python_does_not_leak_across_the_seeded_envs(
         pytest.param(
             {
                 'tox.ini':
-                '[tox]\nlock_check_labels = {env:LOCK_LABEL:pins-audit}\n',
+                '[tox]\n'
+                '[testenv:lock-deps]\nlabels = pins\n'
+                '[testenv:lock-deps-check]\nlabels = pins\n',
             },
-            'pins-audit',
-            ['lock-deps-check'],
-            id='substitutions-are-expanded-check',
-        ),
-        pytest.param(
-            {'tox.ini': '[tox]\nlock_labels = pins\nlock_check_labels = pins\n'},
             'pins',
             ['lock-deps', 'lock-deps-check'],
             id='a-project-may-still-group-them',
@@ -1129,38 +1217,33 @@ def test_each_env_answers_to_its_own_label(
 
 
 @pytest.mark.parametrize(
-    ('config_key', 'label', 'unlabelled_env'),
+    ('env_name', 'label'),
     (
-        pytest.param('lock_labels', 'lock', 'lock-deps', id='write'),
-        pytest.param(
-            'lock_check_labels',
-            'lock-check',
-            'lock-deps-check',
-            id='check',
-        ),
+        pytest.param('lock-deps', 'lock', id='write'),
+        pytest.param('lock-deps-check', 'lock-check', id='check'),
     ),
 )
-def test_lock_labels_can_be_emptied(
+def test_a_seeded_label_can_be_emptied(
     *,
     tox_project: ToxProjectCreator,
-    config_key: str,
+    env_name: str,
     label: str,
-    unlabelled_env: str,
 ) -> None:
-    """A project wanting no label at all says so by emptying the key.
+    """A project wanting no label at all says so in the env's section.
 
     :param tox_project: Tox-provided project factory fixture.
-    :param config_key: The core setting to empty.
-    :param label: The label that setting would otherwise assign.
-    :param unlabelled_env: The env name that label no longer selects.
+    :param env_name: The env to strip the seeded label off.
+    :param label: The label that env would otherwise answer to.
     """
-    project = tox_project({'tox.ini': f'[tox]\n{config_key} =\n'})
+    project = tox_project({
+        'tox.ini': f'[tox]\n[testenv:{env_name}]\nlabels =\n',
+    })
     tox_invocation_result = project.run('list', '--no-desc', '-m', label)
     tox_invocation_result.assert_success()
-    assert unlabelled_env not in tox_invocation_result.out
+    assert env_name not in tox_invocation_result.out
 
 
-def test_lock_labels_are_overridable_per_env(
+def test_a_hand_written_label_replaces_the_seeded_one(
     tox_project: ToxProjectCreator,
 ) -> None:
     """Labelling one env by hand drops the label seeded on it.

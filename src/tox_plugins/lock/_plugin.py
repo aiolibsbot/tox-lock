@@ -16,7 +16,7 @@ from tox.report import HandledError
 if _t.TYPE_CHECKING:
     from collections import abc as _c  # noqa: WPS347
 
-    from tox.config.loader.api import ConfigLoadArgs, Override
+    from tox.config.loader.api import ConfigLoadArgs, Loader, Override
     from tox.config.main import Config
     from tox.config.sets import ConfigSet, EnvConfigSet
     from tox.session.state import State
@@ -98,14 +98,15 @@ _OUTPUT_FILE_SHORT_OPTION = '-o'
 _CUSTOM_COMPILE_COMMAND_OPTION = '--custom-compile-command'
 _DEFAULT_CUSTOM_COMPILE_COMMAND = f'tox run -e {_ENV_NAME}'
 
-# NOTE: Both envs install `uv` from the same setting on purpose. The
-# NOTE: resolver is part of the lock's inputs as much as the sources
-# NOTE: are -- two `uv` releases can pin the same requirements
-# NOTE: differently -- so a check running a newer one than the machine
-# NOTE: that wrote the lock reports drift that is not there. Pinning it
-# NOTE: is the project's call; pinning it *twice*, once per env, is not
-# NOTE: something the project should have to remember.
-_DEFAULT_LOCK_UV = ('uv',)
+# NOTE: Seeded as a *default* on both envs rather than settled by a
+# NOTE: core key of its own: the resolver is one of the lock's inputs as
+# NOTE: much as the sources are -- two `uv` releases can pin the same
+# NOTE: requirements differently, so a check resolving with a newer one
+# NOTE: than the machine that wrote the lock reports drift that is not
+# NOTE: there. Which `uv` it should be is the project's call, and the
+# NOTE: place it says so is `[testenv:lock-deps]`, from which the check
+# NOTE: env inherits it. See `tox_add_env_config` for how.
+_LOCK_UV = ('uv',)
 
 # NOTE: `uv` is configured almost entirely through the environment --
 # NOTE: `UV_INDEX`, `UV_INDEX_URL`, `UV_KEYRING_PROVIDER`, `UV_NATIVE_TLS`
@@ -122,20 +123,16 @@ _DEFAULT_LOCK_UV = ('uv',)
 # NOTE: resolver these envs are built around is configured at all, so a
 # NOTE: project naming one more variable to pass is asking to add to
 # NOTE: this, never to trade it away. `pass_env` is merged rather than
-# NOTE: replaced by tox, so both sit alongside its defaults.
+# NOTE: replaced by tox, so both sit alongside its defaults. This is the
+# NOTE: one setting a project cannot move into `[testenv:lock-deps]`
+# NOTE: instead: a section wins a key outright, so writing `pass_env`
+# NOTE: there would take `UV_*` away along with everything else.
 _LOCK_PASS_ENV = ('UV_*',)
 
 # NOTE: Empty, because the variables a lock run needs beyond the
 # NOTE: resolver's own are whatever a project's index happens to
 # NOTE: authenticate with -- a token under a name nobody else uses.
 _DEFAULT_LOCK_PASS_ENV: tuple[str, ...] = ()
-
-# NOTE: Empty rather than a spelling of "whatever runs tox", which is
-# NOTE: what tox falls back to on its own when the key is left unseeded.
-# NOTE: Naming that fallback here would mean seeding `base_python` on
-# NOTE: every project, and a seeded key is one the env section and `-x`
-# NOTE: have to fight past rather than simply fill in.
-_DEFAULT_LOCK_PYTHON: tuple[str, ...] = ()
 
 # NOTE: The two envs are labelled apart because they are alternatives,
 # NOTE: not a pipeline: one writes the lock, the other asserts that
@@ -144,10 +141,16 @@ _DEFAULT_LOCK_PYTHON: tuple[str, ...] = ()
 # NOTE: under `tox run-parallel` the writer is rewriting the very file
 # NOTE: the checker is reading. Labels rather than bare env names so
 # NOTE: that a project wiring either one into CI or into `depends`
-# NOTE: names something it can rename; labels are additive in tox, so
-# NOTE: one already in use keeps whatever the project put there.
-_DEFAULT_LOCK_LABELS = ('lock',)
-_DEFAULT_CHECK_LABELS = ('lock-check',)
+# NOTE: names something it can rename -- in the env's own section,
+# NOTE: which wins the key; labels are additive in tox, so one already
+# NOTE: in use keeps whatever the project put there.
+#
+# NOTE: Owned rather than defaulted, unlike `uv` above: the check env
+# NOTE: inherits `[testenv:lock-deps]`, and a label the project set on
+# NOTE: the writer must *not* follow that inheritance -- that is the
+# NOTE: same one-label-two-envs group this pair exists to avoid.
+_LOCK_LABELS = ('lock',)
+_CHECK_LABELS = ('lock-check',)
 
 # NOTE: `uv pip compile` seeds its resolution from the output file when
 # NOTE: one is already there, leaving every pin that does not have to
@@ -306,6 +309,28 @@ class _SeedLoader(MemoryLoader):
         return replace(conf, _NoSectionReference(), value, args)
 
 
+class _DefaultSeedLoader(_SeedLoader):
+    """A seed whose values the writer env's own section may replace.
+
+    The check env exists to answer one question -- would compiling the
+    sources again change the lock -- and it can only answer it if it
+    resolves the way the writer does. Both therefore read their
+    resolver, their interpreter and their environment from one place:
+    ``[testenv:lock-deps]``, which the check env takes as its
+    :ref:`base <base>`. Inheritance is not transitive in tox, so
+    ``[testenv]`` stays out of both regardless.
+
+    That leaves a precedence question the plain seed cannot express.
+    What this plugin *owns* -- the commands, the labels telling the two
+    envs apart, the description -- has to outrank the inherited section,
+    or a project setting ``commands`` on the writer would have the
+    checker run them too. What it merely *defaults* -- which ``uv``,
+    which interpreter, which variables to pass -- has to fall below it,
+    or the inheritance would never be reached. Two loaders, ranked
+    either side of the section, rather than one.
+    """
+
+
 def _lock_summary(lock_files: _c.Mapping[Path, _c.Sequence[Path]]) -> str:
     """Spell out which sources each configured lock is compiled from.
 
@@ -332,16 +357,6 @@ def _lock_options(core_conf: ConfigSet) -> _c.Iterator[str]:
     """
     for option in core_conf['lock_options']:
         yield from shlex.split(option)
-
-
-def _seeded_base_python(core_conf: ConfigSet) -> dict[str, list[str]]:
-    """Render the configured lock interpreter as a seeded env setting.
-
-    :param core_conf: The core tox configuration set to read from.
-    :returns: The ``base_python`` seed, empty when none was configured.
-    """
-    lock_python = core_conf['lock_python']
-    return {'base_python': list(lock_python)} if lock_python else {}
 
 
 def _lock_args(state: State) -> tuple[str, ...]:
@@ -482,6 +497,31 @@ def _compile_command(
     ])
 
 
+def _loader_rank(loader: Loader[object], env_name: str) -> int:
+    """Say how strongly a loader's values should bind for an env.
+
+    ``tox`` puts ``memory_seed_loaders`` in front of everything read out
+    of a config file, which would have the plugin's defaults shadow the
+    very sections a user wrote to change them. Ranking them explicitly
+    settles that, and makes room for the check env to inherit the
+    writer's section in between the two kinds of seed.
+
+    :param loader: The loader being ranked.
+    :param env_name: The name of the env whose config is being built.
+    :returns: A sort key -- the lower it is, the stronger the loader.
+    """
+    if loader.section.name == env_name:
+        return 0  # the env's own section: always the last word
+
+    if isinstance(loader, _DefaultSeedLoader):
+        return 3  # a plugin default the inherited section may replace
+
+    if isinstance(loader, _SeedLoader):
+        return 1  # what the plugin owns outright
+
+    return 2  # an inherited section, `[testenv:lock-deps]` in practice
+
+
 @impl
 def tox_extend_envs() -> _c.Iterable[str]:
     """Declare the dependency locking environments.
@@ -495,16 +535,22 @@ def tox_extend_envs() -> _c.Iterable[str]:
 def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
     """Let the user's own settings override the plugin defaults.
 
-    Two separate ways of saying "not that, this" have to be honoured:
+    Three separate ways of saying "not that, this" have to be honoured:
 
     * a ``[testenv:lock-deps]`` / ``[env.lock-deps]`` section -- tox puts
       ``memory_seed_loaders`` in front of the loaders reading it, so the
-      seeded defaults would shadow it; sorting the section's own loader
-      back to the front settles that. The seeded ``base=[]`` still keeps
-      the ``[testenv]`` base section out.
+      seeded defaults would shadow it; ranking the loaders explicitly
+      settles that, see :func:`_loader_rank`. The seeded ``base``
+      still keeps the ``[testenv]`` base section out.
+    * that same writer section read as the check env's ``base`` -- which
+      is why the ranking has to be finer than "the plugin last": what
+      the plugin owns outranks the inherited section, what it merely
+      defaults falls below it.
     * a ``-x`` / ``TOX_OVERRIDE`` override -- carried by the loader of
       the section it names, of which this env has none unless the
-      project happens to declare one anyway.
+      project happens to declare one anyway. An override aimed at the
+      writer env is *not* inherited: it overrides a loader, and the
+      check env inherits a section.
 
     :param env_conf: The configuration set of the env being built.
     :param state: The tox session state holding the override map.
@@ -513,9 +559,9 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
         return
 
     # NOTE: `list.sort()` is stable, so the loaders keep their relative
-    # NOTE: order within the user-section and the plugin-default groups.
+    # NOTE: order within each of the ranks.
     env_conf.loaders.sort(
-        key=lambda loader: loader.section.name != env_conf.name,
+        key=lambda loader: _loader_rank(loader, env_conf.name),
     )
 
     # NOTE: The override map is keyed by the section key of whichever
@@ -555,34 +601,10 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         desc='the locks `tox-lock` compiles, each mapped to its sources',
     )
     core_conf.add_config(
-        'lock_uv',
-        of_type=list[str],
-        default=list(_DEFAULT_LOCK_UV),
-        desc='the `uv` requirements the `tox-lock` envs are run with',
-    )
-    core_conf.add_config(
-        'lock_python',
-        of_type=list[str],
-        default=list(_DEFAULT_LOCK_PYTHON),
-        desc='the interpreter the `tox-lock` envs resolve the lock with',
-    )
-    core_conf.add_config(
         'lock_pass_env',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_PASS_ENV),
         desc='the extra environment variables the `tox-lock` envs pass through',
-    )
-    core_conf.add_config(
-        'lock_labels',
-        of_type=list[str],
-        default=list(_DEFAULT_LOCK_LABELS),
-        desc='the labels `lock-deps` answers to under `tox run -m`',
-    )
-    core_conf.add_config(
-        'lock_check_labels',
-        of_type=list[str],
-        default=list(_DEFAULT_CHECK_LABELS),
-        desc='the labels `lock-deps-check` answers to under `tox run -m`',
     )
     core_conf.add_config(
         'lock_options',
@@ -601,18 +623,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             'instead.',
         )
 
-    lock_uv = core_conf['lock_uv']
-    # NOTE: The interpreter is an input to the lock in the same way the
-    # NOTE: resolver is: `uv pip compile` resolves for the Python it runs
-    # NOTE: under unless told otherwise, so the same sources compiled on
-    # NOTE: 3.11 and on 3.13 legitimately differ -- and a check running
-    # NOTE: one while the lock was written by the other reports drift
-    # NOTE: that is not there. Which interpreter it should be is the
-    # NOTE: project's call; saying it twice, once per env, is not.
-    lock_python = _seeded_base_python(core_conf)
     lock_pass_env = [*_LOCK_PASS_ENV, *core_conf['lock_pass_env']]
-    lock_labels = core_conf['lock_labels']
-    lock_check_labels = core_conf['lock_check_labels']
     lock_summary = _lock_summary(lock_files)
     pos_args = _lock_args(state)
 
@@ -628,10 +639,9 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
-            **lock_python,
-            labels=list(lock_labels),
+            labels=list(_LOCK_LABELS),
             pass_env=list(lock_pass_env),
-            deps=list(lock_uv),
+            deps=list(_LOCK_UV),
             commands_pre=[],
             commands=[
                 _compile_command(core_conf, lock_inputs, lock_file, pos_args)
@@ -657,19 +667,30 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         scratch_root / str(lock_index) / lock_file.name
         for lock_index, lock_file in enumerate(lock_files)
     ]
+    # NOTE: The check env takes `[testenv:lock-deps]` as its base so
+    # NOTE: that a project pinning the resolver, naming an interpreter
+    # NOTE: or passing a token writes it once, on the env it thinks of
+    # NOTE: as "the lock env", and the check follows. Both have to
+    # NOTE: resolve alike or the check reports its own configuration as
+    # NOTE: drift in the project's lock. `base` is not transitive, so
+    # NOTE: this inherits the section and not `[testenv]` behind it.
+    #
+    # NOTE: Named without a section prefix because that is the one
+    # NOTE: spelling both config formats read: `tox.ini` takes the bare
+    # NOTE: env name as readily as `testenv:lock-deps`, while
+    # NOTE: `tox.toml` resolves nothing else -- neither `env.lock-deps`
+    # NOTE: nor the ini spelling, and silently, without an error to say
+    # NOTE: the base went unread.
     state.conf.memory_seed_loaders[_CHECK_ENV_NAME].append(
         _SeedLoader(
-            base=[],
+            base=[_ENV_NAME],
             description=(
                 f'[tox-lock] Check that every lock is what compiling its '
                 f'sources produces -- {lock_summary} -- and fail if it is '
                 f'not, without writing to it. Meant for CI; pass extra '
                 f'arguments after `--`, as with `{_ENV_NAME}`.'
             ),
-            **lock_python,
-            labels=list(lock_check_labels),
-            pass_env=list(lock_pass_env),
-            deps=list(lock_uv),
+            labels=list(_CHECK_LABELS),
             commands_pre=[
                 _python_script_command(
                     _CHECK_SEED_SCRIPT,
@@ -705,5 +726,17 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             ],
             commands_post=[],
             package='skip',
+        ),
+    )
+
+    # NOTE: Ranked below the inherited section rather than alongside the
+    # NOTE: settings above it -- see `_DefaultSeedLoader`. These are the
+    # NOTE: defaults a project replaces by writing `[testenv:lock-deps]`;
+    # NOTE: everything in the loader above is the plugin's own doing and
+    # NOTE: must not follow that inheritance.
+    state.conf.memory_seed_loaders[_CHECK_ENV_NAME].append(
+        _DefaultSeedLoader(
+            pass_env=list(lock_pass_env),
+            deps=list(_LOCK_UV),
         ),
     )
