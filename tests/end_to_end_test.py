@@ -30,6 +30,11 @@ _STALE_PIN = 'attrs==24.2.0'
 
 _LOCK_FILE_NAME = 'requirements.txt'
 
+# NOTE: A source `uv` cannot open, which fails the one compile that
+# NOTE: names it and leaves every other lock's compile a decision for
+# NOTE: the env rather than for tox's command runner.
+_MISSING_SOURCE = 'nonexistent.in'
+
 
 @pytest.fixture
 def lock_project(
@@ -188,3 +193,92 @@ def test_several_locks_are_written_and_checked_together(
     for lock_file in lock_files:
         with subtests.test(msg=f'{lock_file} is named as stale'):
             assert str(lock_file.relative_to(project.path)) in check_report
+
+
+@pytest.mark.network
+def test_a_lock_that_will_not_compile_spares_the_others(
+    tox_project: ToxProjectCreator,
+    enable_pip_pypi_access: str | None,  # noqa: ARG001
+    subtests: SubTests,
+) -> None:
+    """The writer produces every lock it can, and still fails.
+
+    ``uv pip compile`` writes one output per invocation, so the writer
+    runs one command per configured lock -- and ``tox`` abandons the
+    rest of ``commands`` at the first non-zero exit. Stopping there
+    would leave every lock after the broken one untouched, which is a
+    scheduled refresh job reporting one failure and quietly renewing
+    nothing.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param enable_pip_pypi_access: Tox-provided index-access opt-in.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            f'  broken.txt = {_MISSING_SOURCE}\n'
+            '  sound.txt = pyproject.toml\n'
+        ),
+        'pyproject.toml': _ZERO_DEP_PYPROJECT,
+    })
+
+    write_outcome = project.run('run', '-e', 'lock-deps')
+
+    with subtests.test(msg='the run fails'):
+        write_outcome.assert_failed()
+
+    with subtests.test(msg='the unresolvable lock is named'):
+        assert _MISSING_SOURCE in f'{write_outcome.out}{write_outcome.err}'
+
+    with subtests.test(msg='the lock after it was written anyway'):
+        assert (project.path / 'sound.txt').is_file()
+
+
+@pytest.mark.network
+def test_the_check_says_nothing_about_a_lock_it_could_not_recompile(
+    tox_project: ToxProjectCreator,
+    enable_pip_pypi_access: str | None,  # noqa: ARG001
+    subtests: SubTests,
+) -> None:
+    """The check stops rather than vouch for an untouched scratch.
+
+    Carrying on past a failed recompile is the one thing the check must
+    not do: it compiles into a copy of the lock, so a compile that
+    never ran leaves a scratch file identical to the lock it was copied
+    from -- and the comparison would report the very lock it could not
+    recompile as current. ``ignore_errors`` on the writer, which the
+    check takes as its ``base``, must not reach it.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param enable_pip_pypi_access: Tox-provided index-access opt-in.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            f'  broken.txt = {_MISSING_SOURCE}\n'
+            '  sound.txt = pyproject.toml\n'
+            '\n[testenv:lock-deps]\nignore_errors = true\n'
+        ),
+        'pyproject.toml': _ZERO_DEP_PYPROJECT,
+    })
+    for lock_name in ('broken.txt', 'sound.txt'):
+        (project.path / lock_name).write_text(
+            f'{_STALE_PIN}\n',
+            encoding='utf-8',
+        )
+
+    check_outcome = project.run('run', '-e', 'lock-deps-check')
+    check_report = f'{check_outcome.out}{check_outcome.err}'
+
+    with subtests.test(msg='the check fails'):
+        check_outcome.assert_failed()
+
+    with subtests.test(msg='the unresolvable source is named'):
+        assert _MISSING_SOURCE in check_report
+
+    with subtests.test(msg='no verdict is reported for any lock'):
+        assert 'out of date' not in check_report

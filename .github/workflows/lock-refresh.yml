@@ -59,6 +59,7 @@ jobs:
     outputs:
       changed: ${{ steps.recompile.outputs.changed }}
       branch: ${{ steps.recompile.outputs.branch }}
+      recompiled: ${{ steps.recompile.outputs.recompiled }}
 
     steps:
     # NOTE: `persist-credentials` is left on here, alone among the
@@ -88,12 +89,23 @@ jobs:
     # NOTE: through to `uv pip compile` for one run without writing it
     # NOTE: into `lock_options`, where it would make every ordinary
     # NOTE: `tox run -e lock-deps` a version bump as a side effect.
+    #
+    # NOTE: The failure is recorded rather than raised on the spot. The
+    # NOTE: env writes every lock it can and fails for the ones it
+    # NOTE: could not, so aborting here would throw away a resolution
+    # NOTE: that is mostly good and leave a red scheduled run as the
+    # NOTE: only trace -- which is the same thing the `always()` on the
+    # NOTE: pull request below exists to prevent, one step earlier.
+    # NOTE: What survives is pushed, graded and proposed; the last step
+    # NOTE: of this job is what turns the run red.
     - name: Recompile every lock against the newest resolution
       id: recompile
       run: |
         set -euo pipefail
-        python -Im tox run -e lock-deps -- --upgrade
+        recompiled=true
+        python -Im tox run -e lock-deps -- --upgrade || recompiled=false
         echo "branch=${REFRESH_BRANCH}" >> "${GITHUB_OUTPUT}"
+        echo "recompiled=${recompiled}" >> "${GITHUB_OUTPUT}"
         if git diff --quiet -- requirements/; then
           echo 'changed=false' >> "${GITHUB_OUTPUT}"
         else
@@ -115,10 +127,25 @@ jobs:
         git commit --all --message 'Refresh the locked requirements'
         git push --force origin "${REFRESH_BRANCH}"
 
+    # NOTE: Last, so that everything above it has already run. A lock
+    # NOTE: this resolution cannot produce is worth a red scheduled run
+    # NOTE: -- it is usually an upstream release that no longer fits the
+    # NOTE: sources -- but it is worth it *after* the locks that did
+    # NOTE: compile have been pushed and proposed, not instead of them.
+    - name: Fail the run for the locks that would not compile
+      if: steps.recompile.outputs.recompiled != 'true'
+      run: |
+        set -euo pipefail
+        echo '::error::`lock-deps` could not compile every lock.'
+        exit 1
+
   ci:
     name: 🧪 CI
     needs: refresh
-    if: needs.refresh.outputs.changed == 'true'
+    # NOTE: `always()` for the same reason the pull request below has
+    # NOTE: one: the refresh job now ends red when a lock would not
+    # NOTE: compile, and the locks that did are still worth grading.
+    if: always() && needs.refresh.outputs.changed == 'true'
     # NOTE: Against the pushed branch, not against whatever the schedule
     # NOTE: fired on. A reusable workflow is read from the caller's ref
     # NOTE: -- which is what should happen, the refresh branch changing
@@ -159,6 +186,7 @@ jobs:
         GH_REPO: ${{ github.repository }}
         REFRESH_BRANCH: ${{ needs.refresh.outputs.branch }}
         CI_RESULT: ${{ needs.ci.result }}
+        RECOMPILED: ${{ needs.refresh.outputs.recompiled }}
         RUN_URL: >-
           ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
           github.run_id }}
@@ -171,6 +199,15 @@ jobs:
           echo "The suite was run against this branch before the pull"
           echo "request existed, and **${CI_RESULT}**: ${RUN_URL}"
           echo
+          if [[ "${RECOMPILED}" != 'true' ]]; then
+            echo
+            echo "> [!WARNING]"
+            echo "> \`lock-deps\` could not compile every lock, so the"
+            echo "> ones missing from the diff are last week's rather"
+            echo "> than this week's. The run linked above names the"
+            echo "> sources it could not resolve."
+            echo
+          fi
           echo "GitHub does not start a workflow for a branch pushed"
           echo "with its own token, so the checks below this are empty"
           echo "by design -- the run linked above is the one that read"

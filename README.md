@@ -135,6 +135,31 @@ a single run -- `commands` stop at the first failure, and a comparison
 per lock would report the earliest stale one and say nothing about the
 rest.
 
+A lock that will not compile at all is a different matter, and the two
+envs part company over it. `lock-deps` carries on: the locks are
+independent artefacts, so a source `uv` cannot resolve fails the run
+without costing you the ones after it -- otherwise a scheduled
+`lock-deps -- --upgrade` job would report one failure a week and
+quietly renew nothing. `lock-deps-check` stops instead. It recompiles
+into a copy of your lock, so a compile that never ran leaves a scratch
+file identical to the lock it was copied from, and carrying on would
+have the comparison report the one lock it could not recompile as
+current. A source that will not compile is a broken configuration
+rather than drift, `uv` names the file, and the check declines to
+vouch for what it did not check.
+
+That asymmetry is a seeded default on the writer and a fixture of the
+checker. A project preferring the first failure to end the run says
+so the ordinary way:
+
+```ini
+[testenv:lock-deps]
+ignore_errors = false
+```
+
+...and saying the opposite there does not reach the check, which
+inherits that section for everything except what this plugin owns.
+
 The recompile starts from a copy of the current lock, so the check
 reports *drift* -- your lock no longer matching the sources it claims
 to come from -- rather than the mere existence of a newer release
@@ -219,11 +244,10 @@ lock_files = requirements/base.txt = requirements/base.in
 `lock_files` maps each lock to the sources it is compiled from, so a
 project whose dependencies do not come as one set gets a lock per set
 rather than a single lock that is the union of all of them. This
-plugin's own [`tox.ini`] names one per env it installs anything into
--- its tests, its type check, its linters, its builds, its metadata
-check, and the `uv` the lock envs themselves run. That list is not
-reproduced here: a copy of it in this file went stale the first time
-an env was added, and the file it was copied from is one click away.
+plugin's own [`tox.ini`] names one per env it installs anything into.
+That list is not reproduced here: a copy of it in this file went stale
+the first time an env was added, and the file it was copied from is
+one click away.
 
 [`tox.ini`]: https://github.com/tox-dev/tox-lock/blob/main/tox.ini
 

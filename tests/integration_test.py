@@ -90,6 +90,12 @@ def test_lock_env_registered(tox_project: ToxProjectCreator) -> None:
             ('uv',),
             id='lock-deps-deps',
         ),
+        pytest.param(
+            'ignore_errors',
+            (),
+            ('ignore_errors = True',),
+            id='lock-deps-writes-every-lock-it-can',
+        ),
     ),
 )
 def test_env_config(
@@ -680,6 +686,24 @@ def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
             ('deps = uv', 'package = skip'),
             (),
             id='runs-uv-without-building-the-project',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\n'},
+            ('ignore_errors',),
+            ('ignore_errors = False',),
+            (),
+            id='stops-at-a-recompile-it-could-not-run',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\n[testenv:lock-deps]\nignore_errors = true\n'
+                ),
+            },
+            ('ignore_errors',),
+            ('ignore_errors = False',),
+            (),
+            id='the-writers-ignore-errors-is-not-inherited',
         ),
     ),
 )
@@ -1790,3 +1814,27 @@ def test_an_option_is_split_the_way_the_platform_spells_paths(
     """
     monkeypatch.setattr(sys, 'platform', platform)
     assert tuple(_split_option(option)) == expected_args
+
+
+def test_the_writer_can_be_put_back_on_fail_fast(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """Running every compile is a default, not a fixture of the env.
+
+    A project preferring the first failure to end the run says so in the
+    env's own section, which outranks every seed.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\n[testenv:lock-deps]\nignore_errors = false\n',
+    })
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'ignore_errors',
+    )
+    tox_invocation_result.assert_success()
+    assert 'ignore_errors = False' in tox_invocation_result.out

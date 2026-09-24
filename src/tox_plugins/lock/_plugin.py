@@ -617,6 +617,19 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 _compile_command(core_conf, lock_inputs, lock_file, pos_args)
                 for lock_file, lock_inputs in lock_files.items()
             ],
+            # NOTE: `uv pip compile` writes one output per invocation,
+            # NOTE: so a project with N locks gets N commands -- and tox
+            # NOTE: abandons the rest of `commands` at the first
+            # NOTE: non-zero exit. One unresolvable set would therefore
+            # NOTE: stop every lock after it from being written at all,
+            # NOTE: which is how a weekly `lock-deps -- --upgrade` job
+            # NOTE: can refresh nothing for months while reporting the
+            # NOTE: one failure that caused it. The locks are
+            # NOTE: independent artefacts: writing the seven that
+            # NOTE: compile loses nothing, and `ignore_errors` still
+            # NOTE: fails the env, so the eighth is not passed over in
+            # NOTE: silence.
+            ignore_errors=True,
             commands_post=[],
             package='skip',
         ),
@@ -705,6 +718,21 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                     ),
                 ),
             ],
+            # NOTE: The opposite of the writer above, and owned rather
+            # NOTE: than defaulted so that the inherited
+            # NOTE: `[testenv:lock-deps]` cannot hand its own
+            # NOTE: `ignore_errors` to the check. The asymmetry is the
+            # NOTE: difference between producing an artefact and
+            # NOTE: asserting about one: the writer that fails on a
+            # NOTE: lock has still written the others correctly,
+            # NOTE: whereas a check carrying on past a failed recompile
+            # NOTE: would compare the untouched seed copy against the
+            # NOTE: lock it was copied from and report the one lock it
+            # NOTE: could not recompile as current. A source that will
+            # NOTE: not compile is a broken configuration rather than
+            # NOTE: drift, `uv` names the file, and the check stops
+            # NOTE: rather than say something it does not know.
+            ignore_errors=False,
             commands_post=[],
             package='skip',
         ),
