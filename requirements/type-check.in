@@ -1,0 +1,14 @@
+# Compiled *together with* `test.in` rather than instead of it: the
+# type check covers `tests/` as well as `src/`, so every import the
+# suite makes has to be resolvable for `mypy` to have anything but
+# `import-not-found` to say about it. `uv pip compile` unions its
+# sources, so this file only has to name the checker.
+mypy
+
+# NOTE: `mypy` analyses at the floor `requires-python` declares, so it
+# NOTE: reads the `python_version < (3, 11)` half of the plugin's TOML
+# NOTE: import whichever interpreter it runs under. `tomli` is `tox`'s
+# NOTE: dependency below 3.11 and this plugin's own, but nothing
+# NOTE: installs it here at 3.12 -- and an unresolvable import is an
+# NOTE: `import-not-found` rather than a checked branch.
+tomli
