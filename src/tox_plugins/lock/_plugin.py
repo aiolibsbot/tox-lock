@@ -71,11 +71,34 @@ _LOCK_COMMAND_PREFIX = (
 # NOTE: the config file naming them is read from.
 _DEFAULT_LOCK_FILES = {Path('requirements.txt'): [Path('pyproject.toml')]}
 
-# NOTE: Hash pinning is a default rather than a fixture of the command:
-# NOTE: a project depending on a direct URL or an editable checkout
-# NOTE: cannot generate hashes at all, and is entitled to say so
-# NOTE: without also taking ownership of the rest of the command line.
-_DEFAULT_LOCK_OPTIONS = ('--generate-hashes',)
+# NOTE: Empty, so that `lock_options` is a list of what a project
+# NOTE: *adds*. It replaces whatever is in it -- that is what a tox
+# NOTE: list setting does -- so a default parked in it is a default a
+# NOTE: project forfeits the moment it names one option of its own.
+# NOTE: `--universal` is the ordinary case, and it used to cost the
+# NOTE: hash pinning: this plugin's own `tox.ini` restated
+# NOTE: `--generate-hashes` beside it, and so did both README examples.
+# NOTE: A restated default is worse than a missing one -- it goes on
+# NOTE: saying what it said the day it was copied, whatever the plugin
+# NOTE: does afterwards.
+_DEFAULT_LOCK_OPTIONS: tuple[str, ...] = ()
+
+# NOTE: Hash pinning is seeded into the command instead, the way the
+# NOTE: interpreter floor and the header comment are: a default rather
+# NOTE: than a fixture, withdrawn the moment the project names the
+# NOTE: option for itself. A project depending on a direct URL or an
+# NOTE: editable checkout cannot generate hashes at all, and is
+# NOTE: entitled to say so without also taking ownership of the rest of
+# NOTE: the command line.
+#
+# NOTE: Declining is `uv`'s own spelling rather than an emptied
+# NOTE: setting: `--no-generate-hashes` says which option is being
+# NOTE: turned off, where an empty `lock_options` said only "none of
+# NOTE: whatever the plugin had in mind" and stopped meaning that as
+# NOTE: soon as a second default joined the first. Both spellings are
+# NOTE: recognised here so that the seed never lands beside either.
+_GENERATE_HASHES_OPTION = '--generate-hashes'
+_NO_GENERATE_HASHES_OPTION = '--no-generate-hashes'
 
 # NOTE: `uv` records the command it was run with in a header comment at
 # NOTE: the top of every lock it writes, so that whoever finds the file
@@ -483,6 +506,28 @@ def _custom_compile_command(user_args: _c.Sequence[str]) -> tuple[str, ...]:
     return (_CUSTOM_COMPILE_COMMAND_OPTION, _DEFAULT_CUSTOM_COMPILE_COMMAND)
 
 
+def _generate_hashes_option(user_args: _c.Sequence[str]) -> tuple[str, ...]:
+    """Render the hash pinning seeded into the compile command.
+
+    The seed steps aside when the project names either spelling of the
+    option -- asking for it, which would make the seed a duplicate, or
+    declining it, which is the whole point of the spelling existing.
+    ``uv`` takes the last of a repeated ``--generate-hashes`` rather
+    than refusing it, so a seed landing beside a user's own would in
+    fact lose quietly; withdrawing says so out loud instead.
+
+    :param user_args: The arguments the user contributed, in full.
+    :returns: The option, or nothing at all.
+    """
+    if _names_option(user_args, _GENERATE_HASHES_OPTION) or _names_option(
+        user_args,
+        _NO_GENERATE_HASHES_OPTION,
+    ):
+        return ()
+
+    return (_GENERATE_HASHES_OPTION,)
+
+
 def _requires_python_floor(tox_root: Path) -> str | None:
     """Read the oldest Python the project declares it supports.
 
@@ -599,6 +644,16 @@ def _compile_command(
     user_args = (*user_options, *pos_args)
     return Command([
         *_LOCK_COMMAND_PREFIX,
+        # NOTE: Leading the project's own options rather than trailing
+        # NOTE: them, unlike the two seeds below. Nothing rides on the
+        # NOTE: position of a flag that takes no value and does not
+        # NOTE: accumulate; what differs is what the line reads as.
+        # NOTE: Those two answer a question a user argument would
+        # NOTE: otherwise have answered, so they belong after the
+        # NOTE: answer they defer to. This one is the baseline a
+        # NOTE: project's `lock_options` adds to, and reads as the
+        # NOTE: start of the command it is.
+        *_generate_hashes_option(user_args),
         *user_options,
         '--output-file',
         str(output_file),
@@ -781,7 +836,9 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         'lock_options',
         of_type=list[str],
         default=list(_DEFAULT_LOCK_OPTIONS),
-        desc='the `uv pip compile` options `tox-lock` locks with',
+        desc=(
+            'the extra `uv pip compile` options `tox-lock` locks with'
+        ),
     )
 
     lock_files = core_conf['lock_files']
@@ -796,6 +853,17 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
 
     lock_summary = _lock_summary(lock_files)
     pos_args = _lock_args(state)
+    # NOTE: What the description renders is the command as this
+    # NOTE: invocation will actually run it -- the project's own
+    # NOTE: options and the hash pinning seeded beside them -- rather
+    # NOTE: than the `lock_options` setting alone. Since the default
+    # NOTE: moved out of that setting, rendering it alone would have
+    # NOTE: `tox list -v` show a bare `uv pip compile` for the default
+    # NOTE: configuration and say nothing about the hashes it pins.
+    described_options = ' '.join((
+        *_generate_hashes_option((*_lock_options(core_conf), *pos_args)),
+        *_lock_options(core_conf),
+    ))
 
     # NOTE: There is no cleanup counterpart env here on purpose: `uv pip
     # NOTE: compile` writes the output file whole, so a stale lock can
@@ -805,7 +873,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             base=[],
             description=(
                 f'[tox-lock] Compile {lock_summary} using `uv pip compile '
-                f'{" ".join(_lock_options(core_conf))}`; pass extra '
+                f'{described_options}`; pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),

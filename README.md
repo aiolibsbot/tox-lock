@@ -297,25 +297,31 @@ that no lock is stale by virtue of there being none. A project that
 wants neither env drops `tox-lock` from its `requires` instead.
 
 The options `uv pip compile` is invoked with are settable the same
-way. They default to `--generate-hashes`; a project that cannot pin
-hashes -- one depending on a direct URL or an editable checkout --
-opts out by emptying the setting rather than by rewriting the command:
+way. The setting names what your project *adds*, one option per line,
+value included:
 
 ```ini
 [tox]
 lock_options =
-```
-
-...and one wanting more of them lists them, one per line, value
-included:
-
-```ini
-[tox]
-lock_options =
-  --generate-hashes
   --universal
   --no-annotate
 ```
+
+`--generate-hashes` is not among them and does not have to be:
+`tox-lock` seeds it, and adding an option of your own no longer costs
+you it. A project that cannot pin hashes -- one depending on a direct
+URL or an editable checkout -- declines it in `uv`'s own spelling:
+
+```ini
+[tox]
+lock_options =
+  --no-generate-hashes
+```
+
+...which says which option is being turned off, and leaves every other
+one in the list where it was. Naming `--generate-hashes` outright
+works too, and is not read as a duplicate: the seed withdraws the
+moment either spelling appears, in this setting or after `--`.
 
 Each line is split the way the platform's own shell splits a command
 line, so a value quoted for the space in it keeps that space -- and a
@@ -374,7 +380,6 @@ all of them, which is `uv`'s job rather than tox's:
 ```ini
 [tox]
 lock_options =
-  --generate-hashes
   --universal
 ```
 

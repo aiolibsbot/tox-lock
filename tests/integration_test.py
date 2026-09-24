@@ -507,15 +507,45 @@ def test_lock_paths_are_shown_in_the_env_description(
         ),
         pytest.param(
             {'tox.ini': '[tox]\nlock_options =\n'},
-            ('compile --output-file',),
-            ('--generate-hashes',),
-            id='ini-empty-opts-out-of-hashes',
+            ('compile --generate-hashes --output-file',),
+            (),
+            id='ini-empty-adds-nothing-and-takes-nothing-away',
         ),
         pytest.param(
             {'tox.toml': 'lock_options = []\n'},
-            ('compile --output-file',),
-            ('--generate-hashes',),
-            id='toml-empty-opts-out-of-hashes',
+            ('compile --generate-hashes --output-file',),
+            (),
+            id='toml-empty-adds-nothing-and-takes-nothing-away',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --universal\n'},
+            ('compile --generate-hashes --universal --output-file',),
+            (),
+            id='ini-an-added-option-keeps-the-hash-default',
+        ),
+        pytest.param(
+            {'tox.toml': 'lock_options = ["--universal"]\n'},
+            ('compile --generate-hashes --universal --output-file',),
+            (),
+            id='toml-an-added-option-keeps-the-hash-default',
+        ),
+        pytest.param(
+            {'tox.ini': '[tox]\nlock_options = --no-generate-hashes\n'},
+            ('compile --no-generate-hashes --output-file',),
+            ('compile --generate-hashes',),
+            id='ini-declines-hashes-in-uvs-own-spelling',
+        ),
+        pytest.param(
+            {
+                'tox.ini': (
+                    '[tox]\nlock_options =\n'
+                    '  --no-generate-hashes\n'
+                    '  --universal\n'
+                ),
+            },
+            ('compile --no-generate-hashes --universal --output-file',),
+            ('compile --generate-hashes',),
+            id='ini-declining-hashes-keeps-the-other-options',
         ),
         pytest.param(
             {
@@ -528,7 +558,7 @@ def test_lock_paths_are_shown_in_the_env_description(
             },
             ('compile --generate-hashes --universal --output-file',),
             (),
-            id='ini-several-options',
+            id='ini-asking-for-hashes-outright-is-not-a-duplicate',
         ),
         pytest.param(
             {
@@ -536,7 +566,10 @@ def test_lock_paths_are_shown_in_the_env_description(
                     'lock_options = ["--python-version 3.10", "--no-header"]\n'
                 ),
             },
-            ('compile --python-version 3.10 --no-header --output-file',),
+            ((
+                'compile --generate-hashes '
+                '--python-version 3.10 --no-header --output-file'
+            ),),
             (),
             id='toml-an-option-and-its-value-are-split-apart',
         ),
@@ -545,8 +578,8 @@ def test_lock_paths_are_shown_in_the_env_description(
                 'tox.ini':
                     '[tox]\nlock_options = {env:LOCK_OPTS:--no-annotate}\n',
             },
-            ('compile --no-annotate --output-file',),
-            ('--generate-hashes',),
+            ('compile --generate-hashes --no-annotate --output-file',),
+            (),
             id='substitutions-are-expanded',
         ),
         pytest.param(
@@ -602,7 +635,72 @@ def test_lock_options_are_shown_in_the_env_description(
     })
     tox_invocation_result = project.run('list')
     tox_invocation_result.assert_success()
-    assert 'uv pip compile --universal' in tox_invocation_result.out
+    assert (
+        'uv pip compile --generate-hashes --universal'
+        in tox_invocation_result.out
+    )
+
+
+@pytest.mark.parametrize(
+    ('pos_args', 'expected_present', 'expected_absent'),
+    (
+        pytest.param(
+            ('--no-generate-hashes',),
+            ('pyproject.toml --no-generate-hashes',),
+            ('compile --generate-hashes',),
+            id='declining-them-after-the-separator',
+        ),
+        pytest.param(
+            ('--generate-hashes',),
+            ('pyproject.toml --generate-hashes',),
+            ('compile --generate-hashes',),
+            id='asking-for-them-there-is-not-a-duplicate',
+        ),
+        pytest.param(
+            ('--upgrade',),
+            ('compile --generate-hashes', 'pyproject.toml --upgrade'),
+            (),
+            id='an-unrelated-argument-leaves-the-default-alone',
+        ),
+    ),
+)
+def test_hash_pinning_yields_to_an_argument_after_the_separator(
+    *,
+    tox_project: ToxProjectCreator,
+    pos_args: tuple[str, ...],
+    expected_present: tuple[str, ...],
+    expected_absent: tuple[str, ...],
+    subtests: SubTests,
+) -> None:
+    """The seeded hash pinning steps aside for a ``--`` argument too.
+
+    ``lock_options`` is not the only place a project names an option:
+    the arguments after ``--`` reach the same command line, and a seed
+    that only watched the setting would land beside one of them.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param pos_args: The arguments to pass after the ``--`` separator.
+    :param expected_present: Substrings that must appear in the output.
+    :param expected_absent: Substrings that must not appear in the output.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': '[tox]\n'})
+    tox_invocation_result = project.run(
+        'config',
+        '-e',
+        'lock-deps',
+        '-k',
+        'commands',
+        '--',
+        *pos_args,
+    )
+    tox_invocation_result.assert_success()
+    for substring in expected_present:
+        with subtests.test(msg=f'present: {substring}'):
+            assert _native_paths(substring) in tox_invocation_result.out
+    for substring in expected_absent:
+        with subtests.test(msg=f'absent: {substring}'):
+            assert _native_paths(substring) not in tox_invocation_result.out
 
 
 def test_lock_options_reach_the_command_verbatim(
@@ -676,8 +774,8 @@ def test_check_env_registered(tox_project: ToxProjectCreator) -> None:
                 ),
             },
             ('commands',),
-            ('compile --output-file', 'requirements.in'),
-            ('--generate-hashes',),
+            ('compile --generate-hashes --output-file', 'requirements.in'),
+            (),
             id='honours-the-core-lock-settings',
         ),
         pytest.param(
