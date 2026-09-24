@@ -12,28 +12,46 @@ env:
 
 jobs:
 
+  supported-pythons:
+    name: 🧮 Derive the test matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.classifiers.outputs.matrix }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    # NOTE: `pyproject.toml` claimed 3.14 and 3.15 in its classifiers
+    # NOTE: from the initial commit, and the matrix below used to list
+    # NOTE: 3.10 through 3.13 by hand: two public promises that nothing
+    # NOTE: had ever tested. Editing the list back into agreement would
+    # NOTE: have left the mechanism that let it drift in place, so the
+    # NOTE: list is read off the promises instead -- adding a
+    # NOTE: classifier now adds a job.
+    #
+    # NOTE: Run by path, the way `verify-dists` runs its checker: the
+    # NOTE: script reads one file with the standard library, and an
+    # NOTE: installed dist has nothing to add to that. Inline `python
+    # NOTE: -c` would put it beyond the reach of both `ruff` and
+    # NOTE: `mypy`, which do not read string literals.
+    - name: Read the supported Pythons out of the trove classifiers
+      id: classifiers
+      run: >-
+        python -bb -E -s -I -Werror
+        tests/_ci_matrix.py pyproject.toml
+        >> "${GITHUB_OUTPUT}"
+
   test:
+    needs: supported-pythons
     name: 🐍 ${{ matrix.python-version }} @ ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        python-version:
-        - '3.13'
-        - '3.12'
-        - '3.11'
-        - '3.10'
-        runner:
-        - ubuntu-latest
-        include:
-        - python-version: '3.13'
-          runner: windows-latest
-        - python-version: '3.13'
-          runner: macos-latest
-        - python-version: '3.10'
-          runner: windows-latest
-        - python-version: '3.10'
-          runner: macos-latest
+      matrix: ${{ fromJSON(needs.supported-pythons.outputs.matrix) }}
 
     steps:
     - uses: actions/checkout@v4
@@ -44,6 +62,11 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        # NOTE: The classifiers reach ahead of the newest final
+        # NOTE: release, and without this a pre-release spec resolves
+        # NOTE: to the newest final one instead -- which would run the
+        # NOTE: suite twice under it and call that a tested claim.
+        allow-prereleases: true
 
     - name: Install tox
       run: python -Im pip install --upgrade 'tox >= 4.55.1'
