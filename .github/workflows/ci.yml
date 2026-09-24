@@ -125,8 +125,16 @@ jobs:
         # NOTE: suite twice under it and call that a tested claim.
         allow-prereleases: true
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    # NOTE: Alongside `tox` rather than into a `testenv`. `tox.ini`
+    # NOTE: names the plugin in `requires` because its core settings and
+    # NOTE: its two lock envs are the plugin's, and a `tox` without it
+    # NOTE: silently runs `[testenv]` under the name of an env nobody
+    # NOTE: declared a section for rather than saying so. Every job here
+    # NOTE: installs it for that reason, not because every job runs a
+    # NOTE: lock env: what would otherwise happen is provisioning, which
+    # NOTE: fetches a *released* plugin to check the one in this tree.
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     - name: Run the test suite
       run: python -Im tox run -e py
@@ -149,8 +157,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     # NOTE: The env pins the declared floor for the `tox` the suite
     # NOTE: drives in-process -- not for the one launching it, which is
@@ -181,8 +189,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     - name: Type-check the plugin and its test suite
       run: python -Im tox run -e type-check
@@ -208,8 +216,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     - name: Lint the sources, the test suite and the CI workflows
       run: python -Im tox run -e lint
@@ -232,8 +240,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     # NOTE: Here rather than only at release time. A misnamed fragment
     # NOTE: costs nothing to fix in the pull request that added it, and
@@ -260,10 +268,7 @@ jobs:
       with:
         python-version: '3.13'
 
-    # NOTE: Alongside `tox` rather than into a `testenv`: the lock
-    # NOTE: envs only exist if the plugin is loaded by the `tox` being
-    # NOTE: run, and this job runs them directly rather than a suite.
-    - name: Install tox and the plugin it is about to run
+    - name: Install tox and the plugin its config requires
       run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     # NOTE: The plugin locking its own dependencies is the only place
@@ -300,8 +305,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     - name: Build the dists, validate their metadata and their contents
       run: python -Im tox run -e build-dists,metadata-validation,verify-dists

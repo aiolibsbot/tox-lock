@@ -64,6 +64,12 @@ requires =
   tox-lock
 ```
 
+Naming it there rather than only installing it matters: `tox` does not
+refuse a config whose plugin is missing. It ignores the core settings it
+does not recognise and, for an env no section declares, runs `[testenv]`
+under that name instead -- so `tox run -e lock-deps-check` would report
+success having run whatever the default env does.
+
 Then invoke the env the plugin exposes:
 
 ```console

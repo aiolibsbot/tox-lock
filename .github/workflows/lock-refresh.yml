@@ -81,8 +81,8 @@ jobs:
       with:
         python-version: '3.13'
 
-    - name: Install tox
-      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
     # NOTE: `--upgrade` after `--` is how a project passes an option
     # NOTE: through to `uv pip compile` for one run without writing it
