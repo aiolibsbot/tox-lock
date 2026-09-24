@@ -30,6 +30,11 @@ _STALE_PIN = 'attrs==24.2.0'
 
 _LOCK_FILE_NAME = 'requirements.txt'
 
+# NOTE: A requirement with an exact pin and no dependencies of its own:
+# NOTE: compiling it produces one line for `uv` to annotate, and the
+# NOTE: annotation is the whole subject of the test using it.
+_ANNOTATED_PIN = 'attrs == 24.2.0'
+
 # NOTE: A source `uv` cannot open, which fails the one compile that
 # NOTE: names it and leaves every other lock's compile a decision for
 # NOTE: the env rather than for tox's command runner.
@@ -94,6 +99,56 @@ def test_the_check_reports_the_pins_that_moved(
     assert f'-{_STALE_PIN}' in check_report
     assert f'{_LOCK_FILE_NAME} is out of date' in check_report
     assert lock_file.read_text(encoding='utf-8') == f'{_STALE_PIN}\n'
+
+
+@pytest.mark.network
+def test_annotations_moving_is_drift_the_check_reports(
+    tox_project: ToxProjectCreator,
+    enable_pip_pypi_access: str | None,  # noqa: ARG001
+) -> None:
+    """A lock whose pins hold still is not therefore current.
+
+    ``uv`` annotates each pin with the requirement that pulled it in,
+    so moving one between two sources of the same lock rewrites the
+    file without moving a single version. That is the drift a
+    comparison made on the pins alone cannot see: the check passes and
+    ``tox run -e lock-deps`` changes the lock anyway.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param enable_pip_pypi_access: Tox-provided index-access opt-in.
+    """
+    project = tox_project({
+        'tox.ini': (
+            '[tox]\n'
+            'lock_files =\n'
+            '  requirements.txt = base.in, extra.in\n'
+        ),
+        'base.in': f'{_ANNOTATED_PIN}\n',
+        'extra.in': '',
+    })
+
+    project.run('run', '-e', 'lock-deps').assert_success()
+
+    lock_file = project.path / 'requirements.txt'
+    written = lock_file.read_text(encoding='utf-8')
+    assert '# via -r base.in' in written
+
+    (project.path / 'base.in').write_text('', encoding='utf-8')
+    (project.path / 'extra.in').write_text(
+        f'{_ANNOTATED_PIN}\n',
+        encoding='utf-8',
+    )
+
+    check_outcome = project.run('run', '-e', 'lock-deps-check')
+
+    check_outcome.assert_failed()
+    check_report = f'{check_outcome.out}{check_outcome.err}'
+    assert '-    # via -r base.in' in check_report
+    assert '+    # via -r extra.in' in check_report
+    assert 'requirements.txt is out of date' in check_report
+    # NOTE: The check is still the env that never writes, however much
+    # NOTE: of the file it now compares.
+    assert lock_file.read_text(encoding='utf-8') == written
 
 
 @pytest.mark.network

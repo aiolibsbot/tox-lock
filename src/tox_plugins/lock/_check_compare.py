@@ -19,36 +19,26 @@ if _t.TYPE_CHECKING:
     from collections import abc as _c
 
 
-def _pins(lock_file: Path) -> list[str]:
-    """Read the lines of a lock that say what is pinned.
-
-    Comment lines are left out because ``uv`` opens the file it writes
-    with a header naming the command that produced it --
-    ``--output-file`` included, which is the one argument the check is
-    obliged to change. The ``# via ...`` annotations trailing each pin
-    go the same way; they restate the dependency graph the pins
-    themselves encode.
-
-    :param lock_file: The lock to read.
-    :returns: Every line of it that is not a comment.
-    """
-    return [
-        line
-        for line in lock_file.read_text(encoding='utf-8').splitlines()
-        if not line.lstrip().startswith('#')
-    ]
-
-
 def _drift(scratch_file: Path, lock_file: Path) -> _c.Iterator[str]:
     """Spell out what recompiling a lock's sources would change in it.
 
-    The diff is rendered over the same filtered lines the comparison is
-    made on, rather than over the files, so that what a reader is shown
-    is exactly what was compared -- a diff full of header and ``# via``
-    noise would invite the conclusion that the check is tripping over
-    comments it in fact ignores. CI is usually the only place this ever
-    runs, and a log saying nothing but "out of date" sends whoever
-    reads it to recompile locally just to find out what moved.
+    Every line counts, comments included. The check's promise is that
+    writing the lock would change nothing, and ``uv`` writes the whole
+    file: the header naming the command that produced it, the ``# via``
+    annotations recording which requirement pulled each pin in, and the
+    pins themselves. Only the pins used to be compared, because the
+    header named ``--output-file`` and the check is obliged to change
+    that one argument -- but both envs now seed the same
+    ``--custom-compile-command``, so the header they write is the same
+    header, and the exemption outlived its reason. What it went on
+    hiding was real drift: rearrange a project's sources so that the
+    pins land identically and only the annotations move, and the check
+    passed on a lock ``lock-deps`` would have rewritten.
+
+    CI is usually the only place this ever runs, and a log saying
+    nothing but "out of date" sends whoever reads it to recompile
+    locally just to find out what moved -- so the difference is
+    rendered rather than merely counted.
 
     :param scratch_file: The lock as recompiling its sources produces it.
     :param lock_file: The lock the project committed.
@@ -58,7 +48,8 @@ def _drift(scratch_file: Path, lock_file: Path) -> _c.Iterator[str]:
         yield f'{lock_file} does not exist.'
         return
 
-    locked, compiled = _pins(lock_file), _pins(scratch_file)
+    locked = lock_file.read_text(encoding='utf-8').splitlines()
+    compiled = scratch_file.read_text(encoding='utf-8').splitlines()
     if locked == compiled:
         return
 
