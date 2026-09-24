@@ -410,7 +410,15 @@ lock_pass_env = MY_INDEX_TOKEN
 ```
 
 That setting adds to `UV_*` rather than replacing it, the way
-`pass_env` adds to tox's own defaults.
+`pass_env` adds to tox's own defaults -- and so does a `pass_env` of
+your own, wherever you write it. A section wins a config key outright
+in tox, so `[testenv:lock-deps]` with a `pass_env` in it would
+otherwise take the resolver's environment away along with everything
+else: a lock run that has quietly stopped seeing `UV_INDEX` resolves
+against PyPI having been asked for a private index, and says nothing
+about it. Both names come back through the same `post_process` hook
+tox appends its own `PIP_*` with, after every section and every `-x`
+override has had its say, so neither can be replaced by accident.
 
 The labels are settable too, in each env's own section -- renamed to
 fit a project's existing scheme, or emptied to opt out of labelling

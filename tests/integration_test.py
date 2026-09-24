@@ -1519,12 +1519,77 @@ def test_extra_pass_env_adds_to_the_uv_environment(
     assert {'UV_*', 'MY_INDEX_TOKEN'} <= set(passed_env)
 
 
-def test_pass_env_is_overridable_per_env(
-        tox_project: ToxProjectCreator,
+@pytest.mark.parametrize(
+    'config_files',
+    (
+        pytest.param(
+            {
+                'tox.ini':
+                    '[tox]\n'
+                    'lock_pass_env = MY_INDEX_TOKEN\n'
+                    '[testenv:lock-deps]\n'
+                    'pass_env = SECTION_TOKEN\n',
+            },
+            id='on-the-writer-section',
+        ),
+        pytest.param(
+            {
+                'tox.ini':
+                    '[tox]\n'
+                    'lock_pass_env = MY_INDEX_TOKEN\n'
+                    '[testenv:lock-deps-check]\n'
+                    'pass_env = SECTION_TOKEN\n',
+            },
+            id='on-the-check-section',
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    'env_name',
+    ('lock-deps', 'lock-deps-check'),
+)
+def test_a_section_pass_env_does_not_take_the_uv_environment_away(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    env_name: str,
 ) -> None:
-    """A command-line override replaces what the plugin seeded.
+    """Naming `pass_env` in a section adds to `UV_*` rather than replacing.
+
+    A section wins a config key outright, and the section a project is
+    told to write here -- to pin the resolver -- is the very one that
+    would take the resolver's own environment with it. A lock run that
+    silently stops seeing `UV_INDEX` resolves against PyPI having been
+    asked for a private index, which is the failure this refuses to
+    have. `tox`'s own `PIP_*` survives the same config, and by the same
+    mechanism.
 
     :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param env_name: The seeded env to inspect.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run(
+        'config', '-e', env_name, '-k', 'pass_env',
+    )
+    tox_invocation_result.assert_success()
+    passed_env = set(tox_invocation_result.out.split())
+    assert {'UV_*', 'MY_INDEX_TOKEN', 'PIP_*'} <= passed_env
+
+
+@pytest.mark.parametrize(
+    'env_name',
+    ('lock-deps', 'lock-deps-check'),
+)
+def test_pass_env_is_extensible_per_env(
+    *,
+    tox_project: ToxProjectCreator,
+    env_name: str,
+) -> None:
+    """A command-line override adds to the plugin's pass-through list.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param env_name: The seeded env to override and inspect.
     """
     project = tox_project(
         {'tox.ini': '[tox]\nlock_pass_env = MY_INDEX_TOKEN\n'},
@@ -1532,16 +1597,15 @@ def test_pass_env_is_overridable_per_env(
     tox_invocation_result = project.run(
         'config',
         '-e',
-        'lock-deps',
+        env_name,
         '-k',
         'pass_env',
         '-x',
-        'testenv:lock-deps.pass_env=OTHER_TOKEN',
+        f'testenv:{env_name}.pass_env=OTHER_TOKEN',
     )
     tox_invocation_result.assert_success()
-    passed_env = tox_invocation_result.out.split()
-    assert 'OTHER_TOKEN' in passed_env
-    assert 'MY_INDEX_TOKEN' not in passed_env
+    passed_env = set(tox_invocation_result.out.split())
+    assert {'UV_*', 'MY_INDEX_TOKEN', 'OTHER_TOKEN'} <= passed_env
 
 
 @pytest.mark.parametrize('env_name', ('lock-deps', 'lock-deps-check'))

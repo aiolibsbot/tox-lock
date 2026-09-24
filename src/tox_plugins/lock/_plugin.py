@@ -19,6 +19,7 @@ if _t.TYPE_CHECKING:
 
     from tox.config.loader.api import ConfigLoadArgs, Loader, Override
     from tox.config.main import Config
+    from tox.config.of_type import ConfigDynamicDefinition
     from tox.config.sets import ConfigSet, EnvConfigSet
     from tox.session.state import State
 
@@ -119,20 +120,32 @@ _LOCK_UV = ('uv',)
 # NOTE: enumerated: `uv` gains variables release to release, and a list
 # NOTE: written out here would silently stop covering them.
 #
-# NOTE: Unconditional, and not the default of the setting below, for
-# NOTE: the same reason `PIP_*` is unconditional in tox: it is how the
-# NOTE: resolver these envs are built around is configured at all, so a
-# NOTE: project naming one more variable to pass is asking to add to
-# NOTE: this, never to trade it away. `pass_env` is merged rather than
-# NOTE: replaced by tox, so both sit alongside its defaults. This is the
-# NOTE: one setting a project cannot move into `[testenv:lock-deps]`
-# NOTE: instead: a section wins a key outright, so writing `pass_env`
-# NOTE: there would take `UV_*` away along with everything else.
+# NOTE: Unconditional for the same reason `PIP_*` is unconditional in
+# NOTE: tox: it is how the resolver these envs are built around is
+# NOTE: configured at all, so a project naming one more variable to
+# NOTE: pass is asking to add to this, never to trade it away.
+#
+# NOTE: Which means it cannot be seeded as a *value*, the way the rest
+# NOTE: of this module's defaults are. A value is what a section
+# NOTE: replaces: `[testenv:lock-deps]` with a `pass_env` in it -- the
+# NOTE: very section this plugin tells a project to write to pin the
+# NOTE: resolver -- wins the key outright and takes `UV_*` with it, and
+# NOTE: so does a `-x testenv:lock-deps.pass_env=...` override. The run
+# NOTE: then resolves against PyPI having been asked for a private
+# NOTE: index, with nothing said about it. `PIP_*` survives the same
+# NOTE: config because tox does not seed it either: it is appended by
+# NOTE: the `post_process` hanging off the `pass_env` definition, after
+# NOTE: every loader has had its say. See `_pass_uv_env_through`, which
+# NOTE: is that mechanism rather than an imitation of it.
 _LOCK_PASS_ENV = ('UV_*',)
 
 # NOTE: Empty, because the variables a lock run needs beyond the
 # NOTE: resolver's own are whatever a project's index happens to
 # NOTE: authenticate with -- a token under a name nobody else uses.
+# NOTE: Appended through the same `post_process` as `UV_*` above, and
+# NOTE: for the same reason: a project that names a token in this core
+# NOTE: setting and an interpreter in `[testenv:lock-deps]` has said
+# NOTE: two unrelated things, and neither should cancel the other.
 _DEFAULT_LOCK_PASS_ENV: tuple[str, ...] = ()
 
 # NOTE: The two envs are labelled apart because they are alternatives,
@@ -254,7 +267,7 @@ class _DefaultSeedLoader(_SeedLoader):
     The check env exists to answer one question -- would compiling the
     sources again change the lock -- and it can only answer it if it
     resolves the way the writer does. Both therefore read their
-    resolver, their interpreter and their environment from one place:
+    resolver and their interpreter from one place:
     ``[testenv:lock-deps]``, which the check env takes as its
     :ref:`base <base>`. Inheritance is not transitive in tox, so
     ``[testenv]`` stays out of both regardless.
@@ -264,9 +277,14 @@ class _DefaultSeedLoader(_SeedLoader):
     envs apart, the description -- has to outrank the inherited section,
     or a project setting ``commands`` on the writer would have the
     checker run them too. What it merely *defaults* -- which ``uv``,
-    which interpreter, which variables to pass -- has to fall below it,
-    or the inheritance would never be reached. Two loaders, ranked
-    either side of the section, rather than one.
+    which interpreter -- has to fall below it, or the inheritance would
+    never be reached. Two loaders, ranked either side of the section,
+    rather than one.
+
+    Which variables to pass is settled by neither rank: a loader of any
+    strength seeds a *value*, and the resolver's own environment has to
+    outlast a project replacing that value outright. See
+    :func:`_pass_uv_env_through`.
     """
 
 
@@ -464,6 +482,50 @@ def _compile_command(
     ])
 
 
+def _pass_uv_env_through(env_conf: EnvConfigSet, core_conf: ConfigSet) -> None:
+    """Append the resolver's environment after every loader has read.
+
+    ``tox`` registers ``pass_env`` with a ``post_process`` that extends
+    whatever was configured with the defaults of the env's own runner,
+    which is why ``PIP_*`` survives a project writing ``pass_env`` in a
+    section. Seeding a value cannot do that: a section -- or a ``-x``
+    override aimed at one -- replaces the key rather than adding to it,
+    and the section a project is told to write here is
+    ``[testenv:lock-deps]``. So the plugin's contributions go through
+    the same mechanism tox uses for its own, wrapping the definition
+    already registered rather than re-registering it.
+
+    Wrapping is idempotent in effect: the wrapped ``post_process``
+    sorts and deduplicates, so a name appended twice comes back once.
+
+    :param env_conf: The configuration set of the env being built.
+    :param core_conf: The core tox configuration set to read from.
+    """
+    # NOTE: Reached through the mapping rather than re-registered:
+    # NOTE: `add_config` on a key an env already defines is a
+    # NOTE: `ValueError`, and `pass_env` is registered by the runner's
+    # NOTE: own `register_config()` immediately before this hook fires.
+    definition = _t.cast(
+        'ConfigDynamicDefinition[list[str]]',
+        env_conf._defined['pass_env'],  # noqa: SLF001
+    )
+    tox_post_process = definition.post_process
+    extra_pass_env = (*_LOCK_PASS_ENV, *core_conf['lock_pass_env'])
+
+    def post_process(values: list[str]) -> list[str]:
+        """Extend the configured pass-through list with the plugin's.
+
+        :param values: The names every loader between them settled on.
+        :returns: Those names, the resolver's environment alongside.
+        """
+        extended = [*values, *extra_pass_env]
+        return extended if tox_post_process is None else tox_post_process(
+            extended,
+        )
+
+    definition.post_process = post_process
+
+
 def _loader_rank(loader: Loader[object], env_name: str) -> int:
     """Say how strongly a loader's values should bind for an env.
 
@@ -502,7 +564,9 @@ def tox_extend_envs() -> _c.Iterable[str]:
 def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
     """Let the user's own settings override the plugin defaults.
 
-    Three separate ways of saying "not that, this" have to be honoured:
+    Three separate ways of saying "not that, this" have to be honoured
+    -- and one setting that must survive all three, see
+    :func:`_pass_uv_env_through`:
 
     * a ``[testenv:lock-deps]`` / ``[env.lock-deps]`` section -- tox puts
       ``memory_seed_loaders`` in front of the loaders reading it, so the
@@ -524,6 +588,8 @@ def tox_add_env_config(env_conf: EnvConfigSet, state: State) -> None:
     """
     if env_conf.name not in _SEEDED_ENV_NAMES:
         return
+
+    _pass_uv_env_through(env_conf, state.conf.core)
 
     # NOTE: `list.sort()` is stable, so the loaders keep their relative
     # NOTE: order within each of the ranks.
@@ -593,7 +659,6 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             'instead.',
         )
 
-    lock_pass_env = [*_LOCK_PASS_ENV, *core_conf['lock_pass_env']]
     lock_summary = _lock_summary(lock_files)
     pos_args = _lock_args(state)
 
@@ -610,7 +675,6 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),
             labels=list(_LOCK_LABELS),
-            pass_env=list(lock_pass_env),
             deps=list(_LOCK_UV),
             commands_pre=[],
             commands=[
@@ -745,7 +809,6 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
     # NOTE: must not follow that inheritance.
     state.conf.memory_seed_loaders[_CHECK_ENV_NAME].append(
         _DefaultSeedLoader(
-            pass_env=list(lock_pass_env),
             deps=list(_LOCK_UV),
         ),
     )
