@@ -360,6 +360,50 @@ line, so a value quoted for the space in it keeps that space -- and a
 Windows path keeps its backslashes rather than losing them to an
 escape nobody wrote.
 
+`lock_options` says how this *project* resolves, so every lock is
+compiled with it. An option that belongs to one lock alone goes in
+`lock_file_options`, keyed by the lock the way `lock_files` is:
+
+```ini
+[tox]
+lock_files =
+  requirements/base.txt = pyproject.toml
+  requirements/test.txt = pyproject.toml
+lock_file_options =
+  requirements/test.txt = --extra test
+```
+
+Two locks out of the same `pyproject.toml`, one of them carrying the
+test extra, is the ordinary shape of a project that keeps its
+dependencies in metadata rather than in `requirements/*.in` -- and
+`--extra test` in `lock_options` would put `pytest` and everything
+under it into the lock a deployment installs from.
+
+An entry is added to whatever `lock_options` already asked for, and
+read after it, so an option `uv` lets repeat accumulates with the
+narrower say last. That also makes a seeded default declinable for one
+lock alone -- the single dependency reachable only by URL costs that
+lock its hashes and leaves the rest of the project pinned:
+
+```ini
+[tox]
+lock_file_options =
+  requirements/dev.txt = --no-generate-hashes
+```
+
+Both envs read it, and that is the point of it being a setting.
+Saying the same thing per invocation -- `--lock-file requirements/test.txt
+-- --extra test` -- writes the right lock and leaves `lock-deps-check`
+recompiling it without the extra ever after, so the check reports
+drift that a plain `tox run -e lock-deps` then "fixes" by throwing the
+extra away.
+
+A key naming a lock `lock_files` does not declare is refused rather
+than ignored, for the same reason `--lock-file` refuses one: the
+option would go nowhere, the lock it was meant for would compile
+without it, and the run those two settings disagree in would exit
+zero.
+
 Every setting above is a default, and a default steps aside when a
 project names the same option for itself. `--output-file` is the one
 exception -- it is not a default but the argument that tells the two
