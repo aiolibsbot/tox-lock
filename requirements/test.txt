@@ -795,9 +795,9 @@ tomli-w==1.2.0 \
     --hash=sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90 \
     --hash=sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021
     # via tox
-tox==4.64.0 \
-    --hash=sha256:0c6d857b5ab6b60e2ae0dc8ca297de2ba50842bf8f1cb78b50b5d97775d1a9c9 \
-    --hash=sha256:618aae7f71a6d6854e04ff78155c2d0883218a2ea7d3d9f15f4eb59415ff78a2
+tox==4.64.1 \
+    --hash=sha256:3089cfb112f8c5a1fcc652b49e4c708bb00cbaa7c908078ebe470e08f112de4c \
+    --hash=sha256:d10dd88c32e9f15f0ec831f9ebacb9b253f671fd1287d49bead2852fc6225271
     # via -r requirements/test.in
 translationstring==1.4 \
     --hash=sha256:5f4dc4d939573db851c8d840551e1a0fb27b946afe3b95aafc22577eed2d6262 \

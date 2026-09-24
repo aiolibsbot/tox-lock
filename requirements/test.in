@@ -14,13 +14,14 @@ pytest
 pytest-cov
 pytest-subtests
 pytest-xdist
-# NOTE: v4.64.1 builds a real config-file loader for a section the
-# NOTE: file lacks when a `-x` override targets one, so an override
-# NOTE: aimed at `[testenv:lock-deps]` no longer reaches the seed
-# NOTE: loader that exists to carry it. The plugin still behaves the
-# NOTE: same -- its own workaround simply stops being reached, which
-# NOTE: the 100% gate reads as dead code. The declared floor is
-# NOTE: v4.55.1, so the workaround cannot just be deleted; deciding
-# NOTE: what replaces the gate is its own change. Until then the lock
-# NOTE: holds the last release the suite measures clean.
-tox [testing] < 4.64.1
+# NOTE: Unpinned. The ceiling that used to be here held the lock at
+# NOTE: v4.64.0 because `_SeedLoader.substitute()` is reached through
+# NOTE: the command line on v4.62.0 to v4.64.0 alone -- below that
+# NOTE: `tox` does not expand an override's value at all, and from
+# NOTE: v4.64.1 it builds a real config-file loader for the missing
+# NOTE: section, which outranks the seed. The declared floor sits
+# NOTE: below the whole band, so the method stays; what changed is
+# NOTE: that the suite now calls it directly instead of hoping the
+# NOTE: pinned release happens to route through it. A coverage gate
+# NOTE: that only holds on three releases is a gate on this pin.
+tox [testing]

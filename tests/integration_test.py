@@ -8,6 +8,9 @@ from importlib.metadata import version as _installed_version
 
 import pytest
 from packaging.version import Version
+from tox.config.loader.api import ConfigLoadArgs
+
+from tox_plugins.lock._plugin import _SeedLoader
 
 
 if _t.TYPE_CHECKING:
@@ -20,8 +23,10 @@ if _t.TYPE_CHECKING:
 # NOTE: run this plugin perfectly well -- they just pass
 # NOTE: ``{env:LOCK_PIN}`` through with its braces on, as they do for
 # NOTE: every other env. That is `tox`'s behaviour rather than the
-# NOTE: plugin's, so it gates these two cases instead of the floor
-# NOTE: `pyproject.toml` declares.
+# NOTE: plugin's, so it gates the cases that depend on it instead of
+# NOTE: the floor `pyproject.toml` declares. The same release is where
+# NOTE: `Loader.substitute()` -- the method the seed loader overrides,
+# NOTE: and the one it delegates to -- came to exist at all.
 #
 # Ref: https://github.com/tox-dev/tox/pull/4048
 _substituted_overrides = pytest.mark.skipif(
@@ -220,6 +225,83 @@ def test_user_config_precedence(
     for substring in expected_absent:
         with subtests.test(msg=f'absent: {substring}'):
             assert substring not in tox_invocation_result.out
+
+
+# NOTE: The three cases above drive `_SeedLoader.substitute` through the
+# NOTE: command line, and reach it on a narrow band of `tox` releases:
+# NOTE: v4.62.0 is where an override's value began being expanded at
+# NOTE: all, and from v4.64.1 `tox` builds a real config-file loader for
+# NOTE: a section the file lacks -- which outranks the seed, so the
+# NOTE: expansion happens there instead. In between, the seed loader is
+# NOTE: the only thing carrying the override, and the declared floor is
+# NOTE: below the whole band, so the method cannot be deleted either.
+# NOTE: No single supported `tox` therefore runs it end to end, and a
+# NOTE: coverage gate measuring one is a gate on which `tox` the lock
+# NOTE: happens to pin. These cases call the method directly, so what
+# NOTE: is measured is the method rather than the release.
+#
+# Refs:
+# * https://github.com/tox-dev/tox/pull/4048
+@pytest.mark.parametrize(
+    ('config_files', 'raw_value', 'expected_value'),
+    (
+        pytest.param(
+            {'tox.ini': '[tox]\n[testenv]\ndeps = pytest\n'},
+            '{[testenv]deps}',
+            'pytest',
+            # NOTE: The delegation this case is about is to
+            # NOTE: `Loader.substitute()`, which is itself only there
+            # NOTE: from v4.62.0 -- the same release that started
+            # NOTE: calling it. Below that the override here is inert
+            # NOTE: rather than wrong: nothing in `tox` reaches it, and
+            # NOTE: there is no older API for it to have delegated to.
+            marks=_substituted_overrides,
+            id='a-core-section-resolves-a-section-reference',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ndeps = pytest\n'},
+            '{env:LOCK_PIN:uv<97}',
+            'uv<97',
+            id='a-core-less-config-still-reads-the-environment',
+        ),
+        pytest.param(
+            {'tox.ini': '[testenv]\ndeps = pytest\n'},
+            '{[testenv]deps}',
+            '{[testenv]deps}',
+            id='a-core-less-config-leaves-a-section-reference-alone',
+        ),
+    ),
+)
+def test_seed_loader_expands_an_override_value(
+    *,
+    tox_project: ToxProjectCreator,
+    config_files: dict[str, str],
+    raw_value: str,
+    expected_value: str,
+) -> None:
+    """The seed loader expands an override the way the config file would.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param config_files: The tox config files to create in the project.
+    :param raw_value: The override value as the user typed it.
+    :param expected_value: What expanding that value must produce.
+    """
+    project = tox_project(config_files)
+    tox_invocation_result = project.run('config', '-e', 'lock-deps')
+    tox_invocation_result.assert_success()
+
+    tox_config = tox_invocation_result.state.conf
+    config_load_args = ConfigLoadArgs(
+        chain=[],
+        name='deps',
+        env_name='lock-deps',
+    )
+    substituted_value = _SeedLoader().substitute(
+        raw_value,
+        tox_config,
+        config_load_args,
+    )
+    assert substituted_value == expected_value
 
 
 def test_posargs_reach_the_command_verbatim(
