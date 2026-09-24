@@ -8,10 +8,13 @@ name: 🚀 Release
 # NOTE: anything but a tag would be a development version by
 # NOTE: construction.
 #
-# NOTE: `workflow_dispatch` is the rehearsal. It runs everything the
-# NOTE: tag does except the two jobs that hand something out, so that
-# NOTE: this file can be exercised -- and the reuse below proven -- on a
-# NOTE: branch, without a tag nobody meant to cut and cannot take back.
+# NOTE: `workflow_dispatch` is the rehearsal, so that this file can be
+# NOTE: exercised -- and the reuse below proven -- on a branch, without
+# NOTE: a tag nobody meant to cut and cannot take back. It runs the
+# NOTE: suite alone: the three jobs after it read the tag, and a branch
+# NOTE: name is not one. What they read it *with* is covered by the
+# NOTE: suite that rehearsal runs, in `tests/changelog_test.py`, and
+# NOTE: the order they read it in by `tests/release_workflow_test.py`.
 on:  # yamllint disable-line rule:truthy
   push:
     tags:
@@ -50,9 +53,73 @@ jobs:
     permissions:
       contents: read
 
+  # NOTE: Ahead of the upload rather than behind it. `_changelog.py
+  # NOTE: notes` refuses two mistakes -- fragments no `towncrier build`
+  # NOTE: has collected, and a tag whose version the changelog says
+  # NOTE: nothing about -- and both of them are made before the tag is
+  # NOTE: pushed. This check used to sit in `github-release` below,
+  # NOTE: which waits on the upload: the case for failing a release on
+  # NOTE: it was argued there in full and then made void by the job
+  # NOTE: order, PyPI having already taken a filename it never gives
+  # NOTE: back. Nothing here reads a build or a test result, so this
+  # NOTE: waits for nothing and answers in seconds.
+  release-notes:
+    name: 📝 Render the release notes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    outputs:
+      artifact-id: ${{ steps.upload-notes.outputs.artifact-id }}
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    # NOTE: Was `--generate-notes` on the release below, which lists
+    # NOTE: the commit subjects since the previous tag: what the tree
+    # NOTE: did, in the words of whoever wrote the commit, to an
+    # NOTE: audience reading the page to find out whether upgrading
+    # NOTE: will break them. The changelog is written for that audience
+    # NOTE: instead, and the `changelog` gate has been checking its
+    # NOTE: fragments since each change was made.
+    - name: Read this version's notes out of the changelog
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
+      run: |
+        python -Ibb -W error tests/_changelog.py \
+          notes \
+          pyproject.toml \
+          CHANGELOG.md \
+          changelog.d/ \
+          "${RELEASE_TAG#v}" \
+          > "${RUNNER_TEMP}/release-notes.md"
+
+    # NOTE: Handed on as an artifact rather than rendered again where
+    # NOTE: it is used, so that the text the release page shows is the
+    # NOTE: very one this gate accepted.
+    # v4.6.2
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      id: upload-notes
+      with:
+        name: release-notes
+        path: ${{ runner.temp }}/release-notes.md
+
   publish-to-pypi:
     name: 📦 Publish to PyPI
-    needs: ci
+    needs:
+    - ci
+    - release-notes
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -93,6 +160,7 @@ jobs:
     # NOTE: underneath it is still failing.
     needs:
     - ci
+    - release-notes
     - publish-to-pypi
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -102,20 +170,9 @@ jobs:
       contents: write
 
     steps:
-    # NOTE: The tree as well as the dists: the notes below are read out
-    # NOTE: of `CHANGELOG.md` at this tag, which is the same text the
-    # NOTE: `changelog` job has been checking the fragments for since
-    # NOTE: the change was made.
-    # v4.4.0
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-
-    # v5.6.0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-      with:
-        python-version: '3.13'
-
+    # NOTE: Neither the tree nor an interpreter: everything this job
+    # NOTE: publishes was produced by a job the upload waited for, and
+    # NOTE: is fetched here by the id of the step that produced it.
     # v4.3.0
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
@@ -123,28 +180,12 @@ jobs:
         path: dist/
         merge-multiple: true
 
-    # NOTE: Was `--generate-notes`, which lists the commit subjects
-    # NOTE: since the previous tag: what the tree did, in the words of
-    # NOTE: whoever wrote the commit, to an audience reading the page
-    # NOTE: to find out whether upgrading will break them. The
-    # NOTE: changelog is written for that audience instead.
-    #
-    # NOTE: This step fails the release rather than falling back. A
-    # NOTE: tag whose version has no section, or whose fragments were
-    # NOTE: never collected, is a tag cut before `towncrier build` --
-    # NOTE: and the recoverable end of that mistake is here, before
-    # NOTE: PyPI has taken a filename it will never give back.
-    - name: Read this version's notes out of the changelog
-      env:
-        RELEASE_TAG: ${{ github.ref_name }}
-      run: |
-        python -Ibb -W error tests/_changelog.py \
-          notes \
-          pyproject.toml \
-          CHANGELOG.md \
-          changelog.d/ \
-          "${RELEASE_TAG#v}" \
-          > "${RUNNER_TEMP}/release-notes.md"
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        artifact-ids: ${{ needs.release-notes.outputs.artifact-id }}
+        path: ${{ runner.temp }}/notes/
+        merge-multiple: true
 
     - name: Create the release and attach the dists to it
       env:
@@ -162,7 +203,7 @@ jobs:
         gh release create "${RELEASE_TAG}"
         --repo "${RELEASE_REPO}"
         --title "${RELEASE_TAG}"
-        --notes-file "${RUNNER_TEMP}/release-notes.md"
+        --notes-file "${RUNNER_TEMP}/notes/release-notes.md"
         --verify-tag
         dist/*
 
