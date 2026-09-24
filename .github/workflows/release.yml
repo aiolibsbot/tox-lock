@@ -102,6 +102,20 @@ jobs:
       contents: write
 
     steps:
+    # NOTE: The tree as well as the dists: the notes below are read out
+    # NOTE: of `CHANGELOG.md` at this tag, which is the same text the
+    # NOTE: `changelog` job has been checking the fragments for since
+    # NOTE: the change was made.
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
     # v4.3.0
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
@@ -109,9 +123,29 @@ jobs:
         path: dist/
         merge-multiple: true
 
-    # NOTE: Notes generated from the commits since the previous tag.
-    # NOTE: This project keeps no changelog to draw them from yet, and
-    # NOTE: an empty release body says less than the log does.
+    # NOTE: Was `--generate-notes`, which lists the commit subjects
+    # NOTE: since the previous tag: what the tree did, in the words of
+    # NOTE: whoever wrote the commit, to an audience reading the page
+    # NOTE: to find out whether upgrading will break them. The
+    # NOTE: changelog is written for that audience instead.
+    #
+    # NOTE: This step fails the release rather than falling back. A
+    # NOTE: tag whose version has no section, or whose fragments were
+    # NOTE: never collected, is a tag cut before `towncrier build` --
+    # NOTE: and the recoverable end of that mistake is here, before
+    # NOTE: PyPI has taken a filename it will never give back.
+    - name: Read this version's notes out of the changelog
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
+      run: |
+        python -Ibb -W error tests/_changelog.py \
+          notes \
+          pyproject.toml \
+          CHANGELOG.md \
+          changelog.d/ \
+          "${RELEASE_TAG#v}" \
+          > "${RUNNER_TEMP}/release-notes.md"
+
     - name: Create the release and attach the dists to it
       env:
         GH_TOKEN: ${{ github.token }}
@@ -128,7 +162,7 @@ jobs:
         gh release create "${RELEASE_TAG}"
         --repo "${RELEASE_REPO}"
         --title "${RELEASE_TAG}"
-        --generate-notes
+        --notes-file "${RUNNER_TEMP}/release-notes.md"
         --verify-tag
         dist/*
 

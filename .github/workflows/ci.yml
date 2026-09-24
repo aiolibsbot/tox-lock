@@ -214,6 +214,34 @@ jobs:
     - name: Lint the sources, the test suite and the CI workflows
       run: python -Im tox run -e lint
 
+  changelog:
+    name: 📝 Changelog fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox
+      run: python -Im pip install --upgrade 'tox >= 4.55.1'
+
+    # NOTE: Here rather than only at release time. A misnamed fragment
+    # NOTE: costs nothing to fix in the pull request that added it, and
+    # NOTE: is unfixable by the time anybody notices -- the release is
+    # NOTE: out, with the note missing from its page.
+    - name: Check the changelog fragments and preview the result
+      run: python -Im tox run -e changelog
+
   lock-check:
     name: 🔒 Locks up to date
     runs-on: ubuntu-latest

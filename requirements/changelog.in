@@ -1,0 +1,10 @@
+# `towncrier` collects the fragments under `changelog.d/` into
+# `CHANGELOG.md`, and the `changelog` env in `tox.ini` runs it.
+#
+# Standalone rather than compiled together with `test.in`: the
+# validator beside it -- `tests/_changelog.py` -- is written against
+# the standard library alone and never imports this, precisely so that
+# the check `release.yml` depends on does not depend on a resolver.
+# What `towncrier` is here for is rendering, which is the half a human
+# looks at.
+towncrier

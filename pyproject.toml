@@ -84,3 +84,37 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools_scm]
+
+
+# NOTE: A changelog because `release.yml` was drawing its release notes
+# NOTE: from `--generate-notes`, which is a list of commit subjects: it
+# NOTE: says what the tree did, in the words of whoever wrote the
+# NOTE: commit, to an audience that reads a release page to find out
+# NOTE: whether upgrading will break them. The fragments below are
+# NOTE: written for that audience and at the time the change is made,
+# NOTE: which is the only time anybody knows why it was made.
+#
+# NOTE: The category list is `tox`'s own, so that a contributor who has
+# NOTE: filed a fragment against the host project files the same one
+# NOTE: here.
+[tool.towncrier]
+name = "tox-lock"
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+# NOTE: The heading `tests/_changelog.py` looks for when `release.yml`
+# NOTE: asks it for one version's section. Changing its shape is a
+# NOTE: change to that reader too, and `tests/changelog_test.py` is
+# NOTE: what says so out loud rather than letting a release ship an
+# NOTE: empty body.
+title_format = "## {version} ({project_date})"
+issue_format = "[#{issue}](https://github.com/tox-dev/tox-lock/issues/{issue})"
+type = [
+  { directory = "breaking", name = "Backward incompatible changes", showcontent = true },
+  { directory = "deprecation", name = "Deprecations (removal in next major release)", showcontent = true },
+  { directory = "feature", name = "Features", showcontent = true },
+  { directory = "bugfix", name = "Bug fixes", showcontent = true },
+  { directory = "doc", name = "Improved documentation", showcontent = true },
+  { directory = "packaging", name = "Packaging updates and notes for downstreams", showcontent = true },
+  { directory = "contrib", name = "Contributor-facing changes", showcontent = true },
+  { directory = "misc", name = "Miscellaneous internal changes", showcontent = false },
+]
