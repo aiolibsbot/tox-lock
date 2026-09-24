@@ -308,20 +308,15 @@ jobs:
     - name: Install tox and the plugin its config requires
       run: python -Im pip install --upgrade 'tox >= 4.55.1' .
 
-    - name: Build the dists, validate their metadata and their contents
-      run: python -Im tox run -e build-dists,metadata-validation,verify-dists
-
-    # NOTE: The plugin is a PEP 420 namespace subpackage, easy to leave out
-    # NOTE: of a dist by accident. Installing from the built sdist -- never
-    # NOTE: the work tree -- is what catches that.
-    - name: Verify the sdist actually ships an importable plugin
-      run: |
-        set -euxo pipefail
-        python -Im venv "${RUNNER_TEMP}/sdist-venv"
-        "${RUNNER_TEMP}/sdist-venv/bin/python" -Im pip install \
-          --upgrade --no-binary tox-lock dist/*.tar.gz
-        "${RUNNER_TEMP}/sdist-venv/bin/python" -Ic \
-          'import tox_plugins.lock._plugin as p; print(p.__file__)'
+    # NOTE: `smoke-dists` last because it is the only one of these that
+    # NOTE: installs what the others merely read, and an archive that is
+    # NOTE: missing a module or carrying bad metadata is better named by
+    # NOTE: the check that looks for exactly that than by a `tox list`
+    # NOTE: further down the chain coming up short.
+    - name: Build the dists, then validate, inspect and install them
+      run: >-
+        python -Im tox run
+        -e build-dists,metadata-validation,verify-dists,smoke-dists
 
     # v4.6.2
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import re
 from pathlib import Path
 
 import pytest
@@ -13,12 +14,21 @@ _TOX_INI = _REPO_ROOT / 'tox.ini'
 _WORKFLOWS_DIR = _REPO_ROOT / '.github' / 'workflows'
 _CI_WORKFLOW = _WORKFLOWS_DIR / 'ci.yml'
 
-# NOTE: A line scan for a fixed string rather than a YAML parse, for the
-# NOTE: same reason `_ci_matrix` scans `pyproject.toml` rather than
+# NOTE: A text scan for a fixed string rather than a YAML parse, for
+# NOTE: the same reason `_ci_matrix` scans `pyproject.toml` rather than
 # NOTE: parsing it: there is no YAML reader in the standard library, and
 # NOTE: taking a dependency to read one command out of one file this
 # NOTE: repository writes itself buys nothing.
+#
+# NOTE: Whitespace is flattened before the scan rather than the file
+# NOTE: being read a line at a time, because `.yamllint` holds the
+# NOTE: workflows to seventy-nine columns and a `run:` naming several
+# NOTE: envs runs past that. Folding it onto a second line is what a
+# NOTE: contributor does next, and a line scan stops seeing the whole
+# NOTE: job at exactly that point -- silently, which is the one thing a
+# NOTE: check on whether a gate is reachable must not do.
 _TOX_RUN_MARKER = 'python -Im tox run -e '
+_WHITESPACE = re.compile(r'\s+')
 
 
 def _linted_workflows(tox_ini: Path) -> frozenset[str]:
@@ -120,11 +130,11 @@ def _gating_envs(ci_workflow: Path) -> frozenset[str]:
     :returns: Every env named after ``tox run -e`` there, one entry per
         name in a comma-separated list.
     """
+    folded = _WHITESPACE.sub(' ', ci_workflow.read_text(encoding='utf-8'))
     return frozenset(
         env
-        for line in ci_workflow.read_text(encoding='utf-8').splitlines()
-        if _TOX_RUN_MARKER in line
-        for env in line.split(_TOX_RUN_MARKER)[1].split()[0].split(',')
+        for invocation in folded.split(_TOX_RUN_MARKER)[1:]
+        for env in invocation.split()[0].split(',')
     )
 
 
@@ -142,6 +152,28 @@ def test_ci_gates_run_by_default() -> None:
     not, so ``cleanup-dists`` runs here and not there.
     """
     assert _gating_envs(_CI_WORKFLOW) <= _default_envs(_TOX_INI)
+
+
+def test_a_folded_invocation_is_still_read(tmp_path: Path) -> None:
+    """Check that an env list wrapped onto a second line is seen.
+
+    ``.yamllint`` holds the workflows to seventy-nine columns, so a job
+    running several envs has to fold its ``run:``. A scan that read the
+    file a line at a time found the marker and then took the rest of
+    that line -- an empty one -- as the whole list, and the job's envs
+    went unchecked without the check saying so.
+
+    :param tmp_path: Pytest's per-test directory fixture.
+    """
+    ci_workflow = tmp_path / 'ci.yml'
+    ci_workflow.write_text(
+        '    - run: >-\n'
+        '        python -Im tox run -e\n'
+        '        lint,type-check\n',
+        encoding='utf-8',
+    )
+
+    assert _gating_envs(ci_workflow) == {'lint', 'type-check'}
 
 
 def test_a_gate_missing_from_the_default_set_is_caught(
