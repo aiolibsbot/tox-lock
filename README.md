@@ -94,8 +94,8 @@ $ tox run -q -e lock-deps-check
 ```
 
 Each env carries a label of its own -- `lock` and `lock-check` -- so a
-CI job or a `depends` line names something renameable rather than an
-env name it has to keep in step with this plugin:
+CI job selects something renameable rather than an env name it has to
+keep in step with this plugin:
 
 ```console
 $ tox run -q -m lock-check
@@ -220,14 +220,39 @@ test = requirements/test.txt
 deps = -r {[lock]test}
 ```
 
-An env that would rather not run against a stale lock at all says so
-the ordinary way:
+An env that would rather not install from a stale lock has CI ask the
+question alongside it. That takes two lines, and the first is the one
+worth being careful about:
 
 ```ini
-[testenv]
+[tox]
+env_list =
+  lock-deps-check
+  tests
+
+[testenv:tests]
 depends = lock-deps-check
 deps = -r {[lock]test}
 ```
+
+`env_list` is what puts the check in the run. `depends` only says
+where in it -- an entry naming an env the invocation was not asked
+about is passed over without a word, so the `depends` line on its own
+is a guard that never fires, on a lock nothing ever looked at. Being
+silent is what makes it worth spelling out: an unfired guard and a
+current lock read identically from the outside.
+
+Two more things it does not do, both of which shape what the pair
+above is worth. It resolves env *names*, so the labels are no use in
+it: `depends = lock-check` is exactly the entry tox passes over. And
+it orders rather than gates -- a failing `lock-deps-check` leaves the
+env that depends on it to run anyway, against the stale lock, under
+`tox run` and `tox run-parallel` alike.
+
+So what the ordering buys is not a lock the tests never see: it is the
+diff reaching the CI log ahead of the failures it explains. What makes
+the run red is the check's own exit code, which it would have
+contributed whatever order it ran in.
 
 
 ## Configuration
