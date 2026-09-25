@@ -269,6 +269,47 @@ names them; one compiled out of `requirements/*.in` alone names only
 what those files list, and the rest arrive by the second invocation
 above.
 
+That line does not reach a [PEP 751] lock, and a project keeping one
+installs from it differently. `deps` will not read a `pylock.toml`;
+`tox` has a key of its own for it, and refuses an env naming both:
+
+```ini
+[testenv]
+pylock = pylock.toml
+```
+
+What `constrain_package_deps` hands the second invocation is a
+constraints file `tox` writes while installing `deps` -- and a `pylock`
+env never installs any, so the file is never there and the option is a
+no-op:
+
+```console
+app: install_pylock> python -I -m pip install --no-deps -r .tox/app/pylock.txt
+app: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+That is the hole `constrain_package_deps` closes above, reopened with
+the guard switched on and nothing said about it. `constraints` is the way in, and
+it takes a requirements file, so the lock gets a sibling out of the
+same sources:
+
+```ini
+[tox]
+lock_files =
+    pylock.toml = requirements.in
+    constraints.txt = requirements.in
+
+[testenv]
+pylock = pylock.toml
+constraints = {tox_root}/constraints.txt
+constrain_package_deps = true
+```
+
+Two locks out of one source is what it costs, and `lock-deps-check`
+compiles both, so they cannot drift apart unnoticed. Name the path
+absolutely: `tox` hands the entry to `pip` as written, and an env with
+a `change_dir` resolves a relative one somewhere else.
+
 An env that would rather not install from a stale lock has CI ask the
 question alongside it. That takes two lines, and the first is the one
 worth being careful about:
@@ -393,6 +434,10 @@ compiles into a scratch file that keeps the lock's own name, so it
 produces the same format it is comparing against. There is no format
 setting here to keep in step with the file name, because there is
 nothing a format setting could say that the name does not.
+
+Installing from one is where the two formats part company -- see
+[Using the lock](#using-the-lock), which is also where the guard a
+`pylock.toml` does not get is.
 
 [PEP 751]: https://peps.python.org/pep-0751/
 
