@@ -167,6 +167,38 @@ jobs:
     - name: Run the test suite against the declared floor
       run: python -Im tox run -e oldest-tox
 
+  interop-tox-uv:
+    name: 🤝 tox-uv interop
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # NOTE: One job rather than a matrix. What is under test is a
+    # NOTE: pairing of two plugins, not the interpreter either of them
+    # NOTE: runs under -- the matrix above already answers that for
+    # NOTE: everything this env has in common with `py`.
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    # NOTE: The pairing pinned by the env's own lock, not by this step:
+    # NOTE: the suite drives `tox` in-process, so what it exercises is
+    # NOTE: the `tox-uv` installed *into the env*, not one installed
+    # NOTE: beside the `tox` that launched it.
+    - name: Run the suite with `tox-uv` installed alongside
+      run: python -Im tox run -e interop-tox-uv
+
   type-check:
     name: 🔍 Type check
     runs-on: ubuntu-latest

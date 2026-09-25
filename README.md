@@ -54,6 +54,12 @@ What it is not: a resolver, a `uv.lock` replacement, or a lock format.
 `uv` does the resolving and owns the format; this plugin decides which
 sets get locked, with which options, and whether the result is current.
 
+"Used with" is a claim about somebody else's release, so CI runs the
+pairing rather than asserting it: an `interop-tox-uv` env installs
+`tox-uv` alongside and drives both lock envs on the runner it makes
+default. One asymmetry it already turned up is below, under the
+environment `uv` is configured through.
+
 [`tox-uv`]: https://github.com/tox-dev/tox-uv
 
 
@@ -749,6 +755,20 @@ against PyPI having been asked for a private index, and says nothing
 about it. Both names come back through the same `post_process` hook
 tox appends its own `PIP_*` with, after every section and every `-x`
 override has had its say, so neither can be replaced by accident.
+
+One `UV_*` variable does not arrive, and only when [`tox-uv`] is
+installed beside this plugin: it removes `UV_PYTHON` from every env's
+environment, because it would otherwise outrank `VIRTUAL_ENV` while
+`tox-uv` is creating that env. Correct where it is aimed, and
+invisible here -- `UV_PYTHON` is `uv`'s spelling of `--python`, so the
+same `tox run -e lock-deps`, in the same project, can resolve against
+a different interpreter depending on whether an unrelated plugin is
+installed. What keeps that from moving a lock is the seeded
+`--python-version` above, which `uv` prefers to an interpreter it
+would otherwise have to go and find; a project declining that seed is
+the one this can reach. `tests/tox_uv_interop_test.py` holds the
+behaviour still, in both directions, so a release on either side
+changing it is a red build rather than a lock that moved.
 
 The labels are settable too, in each env's own section -- renamed to
 fit a project's existing scheme, or emptied to opt out of labelling

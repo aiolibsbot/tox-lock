@@ -25,6 +25,15 @@ exclude_also =
 
 [run]
 branch = true
+# NOTE: The one module here that no coverage-measuring env collects.
+# NOTE: It runs in `interop-tox-uv`, which is `--no-cov` for the same
+# NOTE: reason `oldest-tox` is, and skips itself everywhere else --
+# NOTE: installing `tox-uv` beside the rest of the suite would move
+# NOTE: every test in it onto another runner. So leaving it in would
+# NOTE: hold the 100% gate down by the length of a file nothing can
+# NOTE: raise.
+omit =
+  tests/tox_uv_interop_test.py
 # `sysmon` does not record dynamic contexts that `--cov-context=test` sets
 core = ctrace
 cover_pylib = false
