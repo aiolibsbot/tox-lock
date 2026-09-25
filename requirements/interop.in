@@ -1,0 +1,11 @@
+# The other half of the pairing the README's Scope section recommends.
+# Compiled *together with* `test.in`, the way `oldest-tox.in` is: this
+# file only has to say the one thing that differs.
+#
+# NOTE: Merely importing `tox-uv` is not what it does -- registering
+# NOTE: makes `uv-venv-runner` the default run env for *every* env in
+# NOTE: the process, packaging envs included. So it cannot live in the
+# NOTE: lock the `py` env installs: it would silently move the whole
+# NOTE: suite onto a different runner and leave nothing running the
+# NOTE: stock one.
+tox-uv
