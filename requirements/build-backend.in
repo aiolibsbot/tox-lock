@@ -1,0 +1,13 @@
+# The build backend is a third install path no lock reached. `tox`
+# installs `[build-system] requires` into its packaging env before
+# either of the two a lock governs, and refuses `deps` there -- so the
+# way in is `constraints` on `[pkgenv]`, which takes a requirements
+# file, and this is the source it is compiled from.
+#
+# A mirror of `[build-system] requires` in `pyproject.toml` rather than
+# a compile of it: `uv pip compile pyproject.toml` reads `[project]
+# dependencies` and there is no option asking for the other table. The
+# two are gated against each other by `tests/build_backend_lock_test.py`
+# so the copy cannot drift.
+setuptools >= 77
+setuptools-scm >= 8

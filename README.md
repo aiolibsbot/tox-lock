@@ -310,6 +310,53 @@ compiles both, so they cannot drift apart unnoticed. Name the path
 absolutely: `tox` hands the entry to `pip` as written, and an env with
 a `change_dir` resolves a relative one somewhere else.
 
+There is a third invocation, and it runs before either of those. A
+packaged project has to be built before it can be installed, and `tox`
+builds it in a packaging env of its own, into which it installs
+whatever `[build-system] requires` names so that the backend exists at
+all:
+
+```console
+.pkg: install_requires> python -I -m pip install 'setuptools>=77' 'setuptools-scm>=8'
+py: install_deps> python -I -m pip install -r requirements/test.txt
+py: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+No lock reaches the first line. `constrain_package_deps` is read where
+the *package's* metadata dependencies are installed, which is the
+third; and `deps` -- the key every other env carries its lock on --
+`tox` refuses on a PEP 517 packaging env outright, because what is
+needed to build is the backend's to declare rather than the project's
+to list. So a tree whose every other install is hash-pinned still
+resolves its build backend from the index, on every machine, and the
+code that runs first in the build is the code nothing pinned.
+
+`constraints` is the way in here too, on `[pkgenv]`, which is the
+section naming that env:
+
+```ini
+[tox]
+lock_files =
+    requirements/build-backend.txt = requirements/build-backend.in
+
+[pkgenv]
+constraints = {tox_root}/requirements/build-backend.txt
+```
+
+The source is a copy of `[build-system] requires` rather than the
+table itself: `uv pip compile pyproject.toml` reads `[project]
+dependencies`, and there is no option asking it for the other one. A
+copy nothing compares is how a backend requirement added in one file
+goes on being resolved from the index because the other was not
+touched, so a project taking this on is signing up to keep the two in
+step -- this repository does it with a test.
+
+What the constraint carries is the pins and not the hashes: `pip`
+reads a constraints file for versions and ignores the `--hash` lines
+beside them, whichever lock they came out of. Pinning the backend
+closes the question of *which* release builds your project; it does
+not put that build under hash checking.
+
 An env that would rather not install from a stale lock has CI ask the
 question alongside it. That takes two lines, and the first is the one
 worth being careful about:
