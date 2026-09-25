@@ -233,6 +233,42 @@ test = requirements/test.txt
 deps = -r {[lock]test}
 ```
 
+What a lock governs, though, is `deps` and nothing else. `tox` installs
+a packaged project in two pip invocations -- the requirements it was
+told about, and then the `dependencies` the project's own metadata
+declares -- and the second is resolved against the index with neither
+the lock's pins nor its hashes in hand:
+
+```console
+py: install_deps> python -I -m pip install -r requirements/test.txt
+py: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+So a lock pinning `httpx==0.27.2`, hashes and all, leaves that env
+running whatever the index offers for `httpx>=0.28`, and says nothing
+about it -- nothing there failed. The guard is stock tox, and it ships
+off:
+
+```ini
+[testenv]
+deps = -r {[lock]test}
+constrain_package_deps = true
+```
+
+That hands the lock's own pins to the second invocation as
+constraints, so a project whose metadata has outgrown its lock gets a
+resolution error naming both sides rather than a quiet upgrade past
+it. Worth writing even where the lock covers everything today: what
+moves is a floor in `pyproject.toml`, and the pin it steps over is the
+one somebody chose deliberately.
+
+Covering those dependencies at all is the other half, and that is
+`lock_files`' job. A lock compiled out of the project's own
+`pyproject.toml` -- the default here, and what `--extra` is for --
+names them; one compiled out of `requirements/*.in` alone names only
+what those files list, and the rest arrive by the second invocation
+above.
+
 An env that would rather not install from a stale lock has CI ask the
 question alongside it. That takes two lines, and the first is the one
 worth being careful about:
