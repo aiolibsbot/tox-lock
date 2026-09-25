@@ -414,24 +414,40 @@ class _DefaultSeedLoader(_SeedLoader):
 def _lock_summary(
     core_conf: ConfigSet,
     selected_locks: _c.Sequence[_SelectedLock],
+    pos_args: _c.Sequence[str],
 ) -> str:
     """Spell out how each selected lock is compiled.
 
-    A lock's own options are named beside its sources rather than in
-    the sentence around the summary, which has only one place to put
-    the options and so could only render them for a project where
-    every lock is compiled alike.
+    Rendered off the very arguments :func:`_compile_command` builds,
+    rather than off the settings they come from. A summary assembled
+    from the settings alone says nothing about the options this plugin
+    seeds -- the hash pinning, the resolution floor, the header comment
+    -- and, worse, cannot say whether a seed applies: hash pinning is
+    withdrawn per lock, so the one lock declining it was described as
+    taking it. A description restating the command drifts from it; one
+    derived from the command cannot.
+
+    Locks compiled alike are named together so that the options are
+    rendered once for a project whose locks all resolve the same way,
+    which is most of them. Grouped in the order the locks are declared,
+    the way everything else about them is.
 
     :param core_conf: The core tox configuration set to read from.
     :param selected_locks: The locks this run is about, with their sources.
+    :param pos_args: The arguments the user passed after ``--``.
     :returns: A human-readable rendering of the selection.
     """
-    return '; '.join(
-        f'{lock_file} out of {", ".join(map(str, lock_inputs))}'
-        + (f' with {options}' if (options := ' '.join(
-            _lock_file_options(core_conf, lock_file),
-        )) else '')
-        for _, lock_file, lock_inputs in selected_locks
+    groups: dict[str, list[str]] = {}
+    for _, lock_file, lock_inputs in selected_locks:
+        leading, trailing = _compile_options(core_conf, lock_file, pos_args)
+        options = shlex.join((*leading, *trailing))
+        groups.setdefault(options, []).append(
+            f'{lock_file} out of {", ".join(map(str, lock_inputs))}',
+        )
+
+    return '; and '.join(
+        f'with `uv pip compile {options}`: {"; ".join(clauses)}'
+        for options, clauses in groups.items()
     )
 
 
@@ -598,19 +614,21 @@ def _names_output_file(args: _c.Sequence[str]) -> bool:
 
 
 def _reject_configured_output_file(
-    user_options: _c.Sequence[str],
-    pos_args: _c.Sequence[str],
+    argument_sources: _c.Iterable[tuple[_c.Sequence[str], str]],
 ) -> None:
     """Refuse a user-supplied output file, naming the setting for it.
 
-    :param user_options: The options read out of ``lock_options``.
-    :param pos_args: The arguments the user passed after ``--``.
-    :raises HandledError: If either of them names the output file.
+    Each place a user argument can come from is looked through under
+    its own name, rather than the merged command line under one of
+    them: the point of the refusal is to send whoever hit it to the
+    setting they wrote, and an option named in ``lock_file_options``
+    blamed on ``lock_options`` sends them to a setting that does not
+    mention it.
+
+    :param argument_sources: The arguments to look through, each with
+        the name of the place they were read from.
+    :raises HandledError: If any of them names the output file.
     """
-    argument_sources = (
-        (user_options, '`lock_options`'),
-        (pos_args, 'the arguments after `--`'),
-    )
     for args, source in argument_sources:
         if not _names_output_file(args):
             continue
@@ -750,6 +768,78 @@ def _python_version_option(
     return () if floor is None else (_PYTHON_VERSION_OPTION, floor)
 
 
+def _compile_options(
+    core_conf: ConfigSet,
+    lock_file: Path,
+    pos_args: _c.Sequence[str],
+) -> tuple[list[str], list[str]]:
+    """Work out every option one lock is compiled with.
+
+    Returned in two halves, the ones the output file and the sources
+    come between, so that the command and the description rendered for
+    a user read the same options in the same order without either
+    having to know how the other is put together.
+
+    The project's own options lead, so that the settings with a core
+    key of their own -- and the arguments passed after ``--`` -- come
+    last, which is what ``uv`` wants for the options it lets repeat:
+    ``--upgrade-package``, ``--extra``, ``--constraint`` and friends
+    accumulate in the order they are given. A lock's own options trail
+    the project-wide ones for the same reason, and so that a lock
+    declining a seed the rest of the project takes --
+    ``--no-generate-hashes`` on the one lock with a direct URL in it --
+    is read the way a project-wide decline is. The ones ``uv`` does not
+    let repeat it rejects outright rather than taking the last, so
+    ordering cannot make a duplicate win and the plugin does not
+    pretend otherwise: it owns ``--output-file``, which is the argument
+    that makes the check a check, and it withdraws every seed of its
+    own the moment a project names one.
+
+    :param core_conf: The core tox configuration set to read from.
+    :param lock_file: The configured lock whose options apply.
+    :param pos_args: The arguments the user passed after ``--``.
+    :returns: The options before the sources, and the ones after them.
+    :raises HandledError: If the user named the output file themselves.
+    """
+    lock_options = list(_lock_options(core_conf))
+    lock_file_options = list(_lock_file_options(core_conf, lock_file))
+    _reject_configured_output_file((
+        (lock_options, '`lock_options`'),
+        (lock_file_options, '`lock_file_options`'),
+        (pos_args, 'the arguments after `--`'),
+    ))
+
+    user_options = [*lock_options, *lock_file_options]
+    user_args = (*user_options, *pos_args)
+    leading = [
+        # NOTE: Leading the project's own options rather than trailing
+        # NOTE: them, unlike the two seeds below. Nothing rides on the
+        # NOTE: position of a flag that takes no value and does not
+        # NOTE: accumulate; what differs is what the line reads as.
+        # NOTE: Those two answer a question a user argument would
+        # NOTE: otherwise have answered, so they belong after the
+        # NOTE: answer they defer to. This one is the baseline a
+        # NOTE: project's `lock_options` adds to, and reads as the
+        # NOTE: start of the command it is.
+        *_generate_hashes_option(user_args),
+        *user_options,
+    ]
+    trailing = [
+        *pos_args,
+        # NOTE: Seeded only when the user named no target of their own,
+        # NOTE: and so never a duplicate `uv` would have to arbitrate.
+        *_python_version_option(user_args, core_conf['tox_root']),
+        # NOTE: Trailing the user's own arguments rather than leading
+        # NOTE: them, so that everything a project wrote reads in the
+        # NOTE: order it wrote it. Nothing rides on the position: the
+        # NOTE: seed is there only when no user argument claims the
+        # NOTE: option, and would be an error rather than a loser if
+        # NOTE: one did.
+        *_custom_compile_command(user_args),
+    ]
+    return leading, trailing
+
+
 def _compile_command(
     core_conf: ConfigSet,
     lock_file: Path,
@@ -772,55 +862,14 @@ def _compile_command(
     :returns: The command compiling the configured sources.
     :raises HandledError: If the user named the output file themselves.
     """
-    # NOTE: The user options go first so that the settings with a core
-    # NOTE: key of their own -- and the arguments passed after `--` --
-    # NOTE: come last, which is what `uv` wants for the options it lets
-    # NOTE: repeat: `--upgrade-package`, `--extra`, `--constraint` and
-    # NOTE: friends accumulate in the order they are given. The ones it
-    # NOTE: does not let repeat it rejects outright rather than taking
-    # NOTE: the last, so ordering cannot make a duplicate win and the
-    # NOTE: plugin does not pretend otherwise: it owns `--output-file`,
-    # NOTE: which is the argument that makes the check a check, and it
-    # NOTE: withdraws its own header default the moment a project names
-    # NOTE: one.
-    # NOTE: Trailing the project-wide ones so that an option `uv` lets
-    # NOTE: repeat accumulates with the narrower say last -- and so
-    # NOTE: that a lock declining a seed the rest of the project takes,
-    # NOTE: `--no-generate-hashes` on the one lock with a direct URL in
-    # NOTE: it, is read the same way a project-wide decline is.
-    user_options = [
-        *_lock_options(core_conf),
-        *_lock_file_options(core_conf, lock_file),
-    ]
-    _reject_configured_output_file(user_options, pos_args)
-    user_args = (*user_options, *pos_args)
+    leading, trailing = _compile_options(core_conf, lock_file, pos_args)
     return Command([
         *_LOCK_COMMAND_PREFIX,
-        # NOTE: Leading the project's own options rather than trailing
-        # NOTE: them, unlike the two seeds below. Nothing rides on the
-        # NOTE: position of a flag that takes no value and does not
-        # NOTE: accumulate; what differs is what the line reads as.
-        # NOTE: Those two answer a question a user argument would
-        # NOTE: otherwise have answered, so they belong after the
-        # NOTE: answer they defer to. This one is the baseline a
-        # NOTE: project's `lock_options` adds to, and reads as the
-        # NOTE: start of the command it is.
-        *_generate_hashes_option(user_args),
-        *user_options,
-        '--output-file',
+        *leading,
+        _OUTPUT_FILE_OPTION,
         str(output_file),
         *map(str, lock_inputs),
-        *pos_args,
-        # NOTE: Seeded only when the user named no target of their own,
-        # NOTE: and so never a duplicate `uv` would have to arbitrate.
-        *_python_version_option(user_args, core_conf['tox_root']),
-        # NOTE: Trailing the user's own arguments rather than leading
-        # NOTE: them, so that everything a project wrote reads in the
-        # NOTE: order it wrote it. Nothing rides on the position: the
-        # NOTE: seed is there only when no user argument claims the
-        # NOTE: option, and would be an error rather than a loser if
-        # NOTE: one did.
-        *_custom_compile_command(user_args),
+        *trailing,
     ])
 
 
@@ -1048,19 +1097,8 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         )
 
     selected_locks = _selected_lock_files(lock_files, state)
-    lock_summary = _lock_summary(core_conf, selected_locks)
     pos_args = _lock_args(state)
-    # NOTE: What the description renders is the command as this
-    # NOTE: invocation will actually run it -- the project's own
-    # NOTE: options and the hash pinning seeded beside them -- rather
-    # NOTE: than the `lock_options` setting alone. Since the default
-    # NOTE: moved out of that setting, rendering it alone would have
-    # NOTE: `tox list -v` show a bare `uv pip compile` for the default
-    # NOTE: configuration and say nothing about the hashes it pins.
-    described_options = ' '.join((
-        *_generate_hashes_option((*_lock_options(core_conf), *pos_args)),
-        *_lock_options(core_conf),
-    ))
+    lock_summary = _lock_summary(core_conf, selected_locks, pos_args)
 
     # NOTE: There is no cleanup counterpart env here on purpose: `uv pip
     # NOTE: compile` writes the output file whole, so a stale lock can
@@ -1069,8 +1107,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         _SeedLoader(
             base=[],
             description=(
-                f'[tox-lock] Compile {lock_summary}, using `uv pip compile '
-                f'{described_options}`; pass extra '
+                f'[tox-lock] Compile, {lock_summary}. Pass extra '
                 f'arguments after `--`. For example, '
                 f'`tox run -e {_ENV_NAME} -- --upgrade`.'
             ),

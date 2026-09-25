@@ -417,6 +417,10 @@ dependencies in metadata rather than in `requirements/*.in` -- and
 `--extra test` in `lock_options` would put `pytest` and everything
 under it into the lock a deployment installs from.
 
+One lock is one entry, so a lock carrying several options names them
+all on its own line -- `requirements/test.txt = --extra test --extra
+docs` -- where `lock_options`, being a plain list, takes one per line.
+
 An entry is added to whatever `lock_options` already asked for, and
 read after it, so an option `uv` lets repeat accumulates with the
 narrower say last. That also makes a seeded default declinable for one

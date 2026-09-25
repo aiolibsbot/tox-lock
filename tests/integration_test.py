@@ -2404,6 +2404,14 @@ def test_an_unknown_lock_file_is_refused(
             )
 
 
+# NOTE: The header comment seeded into every lock, which trails a
+# NOTE: group's options in the rendered description. Spelled out once
+# NOTE: rather than in each expectation, so that a test asserting on
+# NOTE: one group's options asserts on all of them: a rendering that
+# NOTE: dropped a seed would be a description restating a part of the
+# NOTE: command again, which is the thing these tests exist to catch.
+_SEEDED_HEADER = "--custom-compile-command 'tox run -e lock-deps'"
+
 _PER_LOCK_OPTION_INI = (
     '[tox]\n'
     'lock_files =\n'
@@ -2575,15 +2583,109 @@ def test_lock_file_options_are_shown_in_the_env_description(
 
     expectations = {
         'the lock with options of its own names them': _native_paths(
-            'requirements/test.txt out of pyproject.toml with --extra test',
+            f'--generate-hashes --extra test {_SEEDED_HEADER}`: '
+            f'requirements/test.txt out of pyproject.toml',
         ) in tox_invocation_result.out,
         'the one without them does not': _native_paths(
-            'requirements/base.txt out of pyproject.toml;',
+            f'compile --generate-hashes {_SEEDED_HEADER}`: '
+            f'requirements/base.txt out of pyproject.toml',
         ) in tox_invocation_result.out,
     }
     for message, expectation in expectations.items():
         with subtests.test(msg=message):
             assert expectation
+
+
+_DECLINING_LOCK_INI = (
+    '[tox]\n'
+    'lock_files =\n'
+    '  requirements/base.txt = pyproject.toml\n'
+    '  requirements/vendored.txt = pyproject.toml\n'
+    'lock_file_options =\n'
+    '  requirements/vendored.txt = --no-generate-hashes\n'
+)
+
+
+def test_the_description_follows_a_per_lock_decline(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """A lock declining a seed is not described as taking it.
+
+    The rendering is derived from the arguments the command is built
+    out of rather than from the settings behind them, so a seed
+    withdrawn for one lock alone is withdrawn from what that lock is
+    described as compiling with.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({'tox.ini': _DECLINING_LOCK_INI})
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+
+    expectations = {
+        'the declining lock is described without the seed': _native_paths(
+            f'compile --no-generate-hashes {_SEEDED_HEADER}`: '
+            f'requirements/vendored.txt',
+        ) in tox_invocation_result.out,
+        'the other one keeps it': _native_paths(
+            f'compile --generate-hashes {_SEEDED_HEADER}`: '
+            f'requirements/base.txt',
+        ) in tox_invocation_result.out,
+    }
+    for message, expectation in expectations.items():
+        with subtests.test(msg=message):
+            assert expectation
+
+
+def test_the_description_names_every_seeded_option(
+    tox_project: ToxProjectCreator,
+    subtests: SubTests,
+) -> None:
+    """Every option the command carries is one the description shows.
+
+    A description rendering some of the seeds and not others is a
+    second, hand-maintained account of the command line, and drifts
+    from it the way any restatement does.
+
+    :param tox_project: Tox-provided project factory fixture.
+    :param subtests: Pytest's subtest fixture for granular reporting.
+    """
+    project = tox_project({
+        'tox.ini': '[tox]\nlock_files = pinned.txt = pyproject.toml\n',
+        'pyproject.toml': (
+            '[project]\nname = "probe"\nversion = "0"\n'
+            'requires-python = ">= 3.10"\n'
+        ),
+    })
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_success()
+
+    for option in (
+        '--generate-hashes',
+        '--python-version 3.10',
+        "--custom-compile-command 'tox run -e lock-deps'",
+    ):
+        with subtests.test(msg=option):
+            assert option in tox_invocation_result.out
+
+
+def test_an_output_file_names_the_setting_it_came_from(
+    tox_project: ToxProjectCreator,
+) -> None:
+    """The refusal sends the user to the setting they wrote it in.
+
+    :param tox_project: Tox-provided project factory fixture.
+    """
+    project = tox_project({
+        'tox.ini':
+            '[tox]\nlock_files = pinned.txt = pyproject.toml\n'
+            'lock_file_options = pinned.txt = --output-file elsewhere.txt\n',
+    })
+    tox_invocation_result = project.run('list')
+    tox_invocation_result.assert_failed()
+    assert '`lock_file_options`' in tox_invocation_result.out
 
 
 def test_options_for_an_undeclared_lock_are_refused(
