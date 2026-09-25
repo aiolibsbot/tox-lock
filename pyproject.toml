@@ -1,0 +1,129 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [
+  "setuptools >= 77",
+  "setuptools-scm >= 8",
+]
+
+[project]
+name = "tox-lock"
+description = "A tox plugin providing a pre-configured dependency locking toxenv"
+readme = "README.md"
+license = "LicenseRef-MIT-NORUS"
+license-files = ["LICENSE"]
+requires-python = ">= 3.10"
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Framework :: tox",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Archiving :: Packaging",
+]
+dependencies = [
+  # NOTE: v4.29.0 is the first one to implement the `tox_extend_envs`
+  # NOTE: lifecycle hook. But the initial version had a bug fixed in
+  # NOTE: the following version 4.30.0.
+  #
+  # Refs:
+  # * https://github.com/tox-dev/tox/issues/3510
+  # * https://github.com/tox-dev/tox/pull/3591
+  # * https://github.com/tox-dev/tox/pull/3598
+  #
+  # NOTE: v4.31.0 is the first one to convert a builtin parametrized
+  # NOTE: generic -- `dict[Path, list[Path]]`, which the `lock_files`
+  # NOTE: core setting is declared as -- into the type it names rather
+  # NOTE: than flattening it into a list of strings.
+  #
+  # NOTE: And v4.55.1 is the first one to expose the override map as
+  # NOTE: public API. Reading it is how a `-x` override reaches an env
+  # NOTE: nobody wrote a section for, which is every project's first
+  # NOTE: encounter with this plugin, so the floor is here rather than
+  # NOTE: at 4.31: the alternative is the plugin reaching into a private
+  # NOTE: attribute for twenty-four releases' worth of users.
+  #
+  # NOTE: One thing does arrive later still -- `tox` began expanding the
+  # NOTE: substitutions in an override's value in v4.62.0, so
+  # NOTE: `-x testenv:lock-deps.deps={env:LOCK_PIN}` keeps the braces
+  # NOTE: under anything older. That is not a floor: it is `tox`'s own
+  # NOTE: behaviour for every env, this plugin's included, and a project
+  # NOTE: meets it the same way whichever env it overrides. The tests
+  # NOTE: covering it are gated on the version rather than the whole
+  # NOTE: plugin being.
+  #
+  # Refs:
+  # * https://github.com/tox-dev/tox/pull/3624
+  # * https://github.com/tox-dev/tox/pull/3951
+  # * https://github.com/tox-dev/tox/pull/4048
+  "tox >= 4.55.1",
+  # NOTE: Both are `tox`'s own dependencies and so are always present
+  # NOTE: wherever this plugin runs. They are named anyway because the
+  # NOTE: plugin imports them itself -- to read `requires-python` out of
+  # NOTE: a project's `pyproject.toml` -- and a transitive dependency is
+  # NOTE: a promise nobody made. No floor on either: the APIs used here
+  # NOTE: are `SpecifierSet`, `Version` and `tomllib.loads`, none of
+  # NOTE: which is newer than the `tox` release above.
+  "packaging",
+  "tomli ; python_version < '3.11'",
+]
+dynamic = [
+  "version",
+]
+
+# NOTE: The sidebar of the project page on PyPI, which is where somebody
+# NOTE: who found the plugin through its dist rather than through this
+# NOTE: repository goes looking for the source and the issue tracker.
+# NOTE: Without these the page names neither.
+[project.urls]
+Homepage = "https://github.com/tox-dev/tox-lock"
+Source = "https://github.com/tox-dev/tox-lock"
+"Issue tracker" = "https://github.com/tox-dev/tox-lock/issues"
+
+[project.entry-points.tox]
+tox-lock = "tox_plugins.lock._plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+[tool.setuptools_scm]
+
+
+# NOTE: A changelog because `release.yml` was drawing its release notes
+# NOTE: from `--generate-notes`, which is a list of commit subjects: it
+# NOTE: says what the tree did, in the words of whoever wrote the
+# NOTE: commit, to an audience that reads a release page to find out
+# NOTE: whether upgrading will break them. The fragments below are
+# NOTE: written for that audience and at the time the change is made,
+# NOTE: which is the only time anybody knows why it was made.
+#
+# NOTE: The category list is `tox`'s own, so that a contributor who has
+# NOTE: filed a fragment against the host project files the same one
+# NOTE: here.
+[tool.towncrier]
+name = "tox-lock"
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+# NOTE: The heading `tests/_changelog.py` looks for when `release.yml`
+# NOTE: asks it for one version's section. Changing its shape is a
+# NOTE: change to that reader too, and `tests/changelog_test.py` is
+# NOTE: what says so out loud rather than letting a release ship an
+# NOTE: empty body.
+title_format = "## {version} ({project_date})"
+issue_format = "[#{issue}](https://github.com/tox-dev/tox-lock/issues/{issue})"
+type = [
+  { directory = "breaking", name = "Backward incompatible changes", showcontent = true },
+  { directory = "deprecation", name = "Deprecations (removal in next major release)", showcontent = true },
+  { directory = "feature", name = "Features", showcontent = true },
+  { directory = "bugfix", name = "Bug fixes", showcontent = true },
+  { directory = "doc", name = "Improved documentation", showcontent = true },
+  { directory = "packaging", name = "Packaging updates and notes for downstreams", showcontent = true },
+  { directory = "contrib", name = "Contributor-facing changes", showcontent = true },
+  { directory = "misc", name = "Miscellaneous internal changes", showcontent = false },
+]

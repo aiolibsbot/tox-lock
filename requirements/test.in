@@ -1,0 +1,27 @@
+# Everything the test suite needs *except* a pinned `tox`, so that the
+# `oldest-tox` lock beside it can swap which `tox` the tests run
+# against without restating the rest of the list.
+#
+# NOTE: `tox`'s `[testing]` extra provides `devpi-process` / `pytest`
+# NOTE: (needed by the `tox.pytest` plugin) starting from v4.54.0. They
+# NOTE: are listed here rather than left to the extra so that both
+# NOTE: locks get them whichever `tox` they pin.
+# Ref: https://github.com/tox-dev/tox/issues/3938
+covdefaults
+coverage
+devpi-process
+pytest
+pytest-cov
+pytest-subtests
+pytest-xdist
+# NOTE: Unpinned. The ceiling that used to be here held the lock at
+# NOTE: v4.64.0 because `_SeedLoader.substitute()` is reached through
+# NOTE: the command line on v4.62.0 to v4.64.0 alone -- below that
+# NOTE: `tox` does not expand an override's value at all, and from
+# NOTE: v4.64.1 it builds a real config-file loader for the missing
+# NOTE: section, which outranks the seed. The declared floor sits
+# NOTE: below the whole band, so the method stays; what changed is
+# NOTE: that the suite now calls it directly instead of hoping the
+# NOTE: pinned release happens to route through it. A coverage gate
+# NOTE: that only holds on three releases is a gate on this pin.
+tox [testing]

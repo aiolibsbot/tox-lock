@@ -1,0 +1,328 @@
+---
+
+name: 🧪 CI
+
+on:  # yamllint disable-line rule:truthy
+  push:
+  pull_request:
+  workflow_dispatch:
+  # NOTE: Called by the release workflow so that a tag publishes the
+  # NOTE: dists this suite has already accepted, rather than a second
+  # NOTE: build of its own that nothing ran the matrix against.
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          The commit, tag or branch to run the suite against. Empty --
+          the default -- means whatever ref the caller was triggered
+          on, which is what the release workflow wants.
+        type: string
+        default: ''
+        required: false
+    outputs:
+      dists-artifact-id:
+        description: The id of the artifact holding the built dists
+        value: ${{ jobs.dists.outputs.artifact-id }}
+
+# NOTE: Two things every `uses:` and every checkout in this file does,
+# NOTE: said once here rather than seven times below.
+#
+# NOTE: Actions are pinned to a commit, with the release they were cut
+# NOTE: from in the comment beside them. A tag is a mutable pointer: an
+# NOTE: attacker who reaches an action's repository can move `v4` and be
+# NOTE: running inside every job here, including the one this workflow
+# NOTE: hands its dists to. The rest of this project's dependencies are
+# NOTE: hash-pinned under `requirements/` by the very plugin it ships,
+# NOTE: and its CI supply chain was the half still floating.
+#
+# NOTE: Every checkout takes `ref` from the `workflow_call` input above,
+# NOTE: which is empty for every trigger but a call that names one. The
+# NOTE: lock refresher calls this workflow against the branch it has just
+# NOTE: pushed: without a ref the suite would grade the default branch
+# NOTE: and report green on locks it never read.
+#
+# NOTE: `persist-credentials: false` because `checkout` otherwise leaves
+# NOTE: the token it was handed in `.git/config`, where every later step
+# NOTE: can read it and an artifact upload rooted at `.` would ship it.
+# NOTE: Nothing here pushes, so nothing here needs it after the clone.
+
+env:
+  FORCE_COLOR: 1
+
+# NOTE: Every job here reads the repository and writes nothing back.
+# NOTE: Spelled out because this workflow is also called by the one that
+# NOTE: publishes: a reusable workflow cannot be granted more than its
+# NOTE: caller holds, and the caller has to know what to grant.
+permissions:
+  contents: read
+
+jobs:
+
+  supported-pythons:
+    name: 🧮 Derive the test matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.classifiers.outputs.matrix }}
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    # NOTE: `pyproject.toml` claimed 3.14 and 3.15 in its classifiers
+    # NOTE: from the initial commit, and the matrix below used to list
+    # NOTE: 3.10 through 3.13 by hand: two public promises that nothing
+    # NOTE: had ever tested. Editing the list back into agreement would
+    # NOTE: have left the mechanism that let it drift in place, so the
+    # NOTE: list is read off the promises instead -- adding a
+    # NOTE: classifier now adds a job.
+    #
+    # NOTE: Run by path, the way `verify-dists` runs its checker: the
+    # NOTE: script reads one file with the standard library, and an
+    # NOTE: installed dist has nothing to add to that. Inline `python
+    # NOTE: -c` would put it beyond the reach of both `ruff` and
+    # NOTE: `mypy`, which do not read string literals.
+    - name: Read the supported Pythons out of the trove classifiers
+      id: classifiers
+      run: >-
+        python -bb -E -s -I -Werror
+        tests/_ci_matrix.py pyproject.toml
+        >> "${GITHUB_OUTPUT}"
+
+  test:
+    needs: supported-pythons
+    name: 🐍 ${{ matrix.python-version }} @ ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.supported-pythons.outputs.matrix) }}
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        # NOTE: `setuptools-scm` needs the tags to derive a version.
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: ${{ matrix.python-version }}
+        # NOTE: The classifiers reach ahead of the newest final
+        # NOTE: release, and without this a pre-release spec resolves
+        # NOTE: to the newest final one instead -- which would run the
+        # NOTE: suite twice under it and call that a tested claim.
+        allow-prereleases: true
+
+    # NOTE: Alongside `tox` rather than into a `testenv`. `tox.ini`
+    # NOTE: names the plugin in `requires` because its core settings and
+    # NOTE: its two lock envs are the plugin's, and a `tox` without it
+    # NOTE: silently runs `[testenv]` under the name of an env nobody
+    # NOTE: declared a section for rather than saying so. Every job here
+    # NOTE: installs it for that reason, not because every job runs a
+    # NOTE: lock env: what would otherwise happen is provisioning, which
+    # NOTE: fetches a *released* plugin to check the one in this tree.
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    - name: Run the test suite
+      run: python -Im tox run -e py
+
+  oldest-tox:
+    name: 🕰️ Oldest supported tox
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    # NOTE: The env pins the declared floor for the `tox` the suite
+    # NOTE: drives in-process -- not for the one launching it, which is
+    # NOTE: why installing an old `tox` in this step would prove
+    # NOTE: nothing.
+    - name: Run the test suite against the declared floor
+      run: python -Im tox run -e oldest-tox
+
+  type-check:
+    name: 🔍 Type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # NOTE: One job rather than a matrix: `mypy` is told which
+    # NOTE: interpreter to analyse for by `python_version` in
+    # NOTE: `.mypy.ini`, so running it under four of them would repeat
+    # NOTE: the same check four times.
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    - name: Type-check the plugin and its test suite
+      run: python -Im tox run -e type-check
+
+  lint:
+    name: 🧹 Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # NOTE: One job rather than a matrix: which rules apply is settled
+    # NOTE: by `target-version` in `.ruff.toml`, not by the interpreter
+    # NOTE: the linter runs under.
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    - name: Lint the sources, the test suite and the CI workflows
+      run: python -Im tox run -e lint
+
+  changelog:
+    name: 📝 Changelog fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    # NOTE: Here rather than only at release time. A misnamed fragment
+    # NOTE: costs nothing to fix in the pull request that added it, and
+    # NOTE: is unfixable by the time anybody notices -- the release is
+    # NOTE: out, with the note missing from its page.
+    - name: Check the changelog fragments and preview the result
+      run: python -Im tox run -e changelog
+
+  lock-check:
+    name: 🔒 Locks up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    # NOTE: The plugin locking its own dependencies is the only place
+    # NOTE: either lock env runs against a real project rather than a
+    # NOTE: fixture. This job is what keeps the five locks under
+    # NOTE: `requirements/` honest -- and, incidentally, what would
+    # NOTE: notice `lock-deps-check` going quietly green on drift.
+    - name: Verify the committed locks match their sources
+      run: python -Im tox run -e lock-deps-check
+
+  dists:
+    name: 📦 Build & check dists
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # NOTE: The artifact is published by *id* rather than by name so
+    # NOTE: that the release workflow downloading it shares this job's
+    # NOTE: own idea of which upload it means. A name repeated in the
+    # NOTE: other file would be a literal in two places whose drift
+    # NOTE: surfaces at the one moment nobody wants a red build: on the
+    # NOTE: tag, after the dists are already built.
+    outputs:
+      artifact-id: ${{ steps.upload-dists.outputs.artifact-id }}
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    - name: Install tox and the plugin its config requires
+      run: python -Im pip install --upgrade 'tox >= 4.55.1' .
+
+    # NOTE: `smoke-dists` last because it is the only one of these that
+    # NOTE: installs what the others merely read, and an archive that is
+    # NOTE: missing a module or carrying bad metadata is better named by
+    # NOTE: the check that looks for exactly that than by a `tox list`
+    # NOTE: further down the chain coming up short.
+    - name: Build the dists, then validate, inspect and install them
+      run: >-
+        python -Im tox run
+        -e build-dists,metadata-validation,verify-dists,smoke-dists
+
+    # v4.6.2
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      id: upload-dists
+      with:
+        name: dists
+        path: dist/
+
+...

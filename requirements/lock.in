@@ -1,0 +1,7 @@
+# The resolver is itself a lock input: a floating `uv` makes
+# `lock-deps-check` report resolver drift as source drift. Locking it
+# is circular by nature -- `lock-deps` installs from a lock it is the
+# only thing that writes -- which is fine once bootstrapped, and
+# recoverable by running `lock-deps` with an unpinned `uv` if it is
+# ever not.
+uv

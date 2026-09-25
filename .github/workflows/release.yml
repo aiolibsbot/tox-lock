@@ -1,0 +1,210 @@
+---
+
+name: 🚀 Release
+
+# NOTE: A tag is the trigger because `setuptools-scm` derives the
+# NOTE: version from one: there is no version string in the tree for a
+# NOTE: workflow input to disagree with, and a release built from
+# NOTE: anything but a tag would be a development version by
+# NOTE: construction.
+#
+# NOTE: `workflow_dispatch` is the rehearsal, so that this file can be
+# NOTE: exercised -- and the reuse below proven -- on a branch, without
+# NOTE: a tag nobody meant to cut and cannot take back. It runs the
+# NOTE: suite alone: the three jobs after it read the tag, and a branch
+# NOTE: name is not one. What they read it *with* is covered by the
+# NOTE: suite that rehearsal runs, in `tests/changelog_test.py`, and
+# NOTE: the order they read it in by `tests/release_workflow_test.py`.
+on:  # yamllint disable-line rule:truthy
+  push:
+    tags:
+    - v*
+  workflow_dispatch:
+
+# NOTE: Not cancellable, unlike a CI run: the point of the group is to
+# NOTE: keep two tags from publishing at once, not to drop the older
+# NOTE: one. An upload interrupted halfway leaves a release on PyPI
+# NOTE: that no rerun can replace, filenames there being final.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# NOTE: Nothing at the top, and each job below asks for exactly what it
+# NOTE: hands out: the token this workflow starts with is the one that
+# NOTE: may publish under the project's name.
+permissions: {}
+
+jobs:
+
+  ci:
+    name: 🧪 CI
+    # NOTE: The suite is *called* rather than depended on. A release
+    # NOTE: whose dists came out of a build of its own would be
+    # NOTE: publishing an artifact the matrix, the type check, the
+    # NOTE: linters and the lock check had all passed judgement on a
+    # NOTE: different copy of -- and `verify-dists` in particular exists
+    # NOTE: to say what is inside the archive that ships.
+    # NOTE: `zizmor` prefers `$/...` here, which resolves to this
+    # NOTE: repository without naming it. Both spellings are
+    # NOTE: relative to the same place and neither can be
+    # NOTE: redirected; `./` is what the reuse was rehearsed with
+    # NOTE: and what a reader of GitHub's own docs meets first.
+    uses: ./.github/workflows/ci.yml  # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+
+  # NOTE: Ahead of the upload rather than behind it. `_changelog.py
+  # NOTE: notes` refuses two mistakes -- fragments no `towncrier build`
+  # NOTE: has collected, and a tag whose version the changelog says
+  # NOTE: nothing about -- and both of them are made before the tag is
+  # NOTE: pushed. This check used to sit in `github-release` below,
+  # NOTE: which waits on the upload: the case for failing a release on
+  # NOTE: it was argued there in full and then made void by the job
+  # NOTE: order, PyPI having already taken a filename it never gives
+  # NOTE: back. Nothing here reads a build or a test result, so this
+  # NOTE: waits for nothing and answers in seconds.
+  release-notes:
+    name: 📝 Render the release notes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    outputs:
+      artifact-id: ${{ steps.upload-notes.outputs.artifact-id }}
+
+    steps:
+    # v4.4.0
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+
+    # v5.6.0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+
+    # NOTE: Was `--generate-notes` on the release below, which lists
+    # NOTE: the commit subjects since the previous tag: what the tree
+    # NOTE: did, in the words of whoever wrote the commit, to an
+    # NOTE: audience reading the page to find out whether upgrading
+    # NOTE: will break them. The changelog is written for that audience
+    # NOTE: instead, and the `changelog` gate has been checking its
+    # NOTE: fragments since each change was made.
+    - name: Read this version's notes out of the changelog
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
+      run: |
+        python -Ibb -W error tests/_changelog.py \
+          notes \
+          pyproject.toml \
+          CHANGELOG.md \
+          changelog.d/ \
+          "${RELEASE_TAG#v}" \
+          > "${RUNNER_TEMP}/release-notes.md"
+
+    # NOTE: Handed on as an artifact rather than rendered again where
+    # NOTE: it is used, so that the text the release page shows is the
+    # NOTE: very one this gate accepted.
+    # v4.6.2
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      id: upload-notes
+      with:
+        name: release-notes
+        path: ${{ runner.temp }}/release-notes.md
+
+  publish-to-pypi:
+    name: 📦 Publish to PyPI
+    needs:
+    - ci
+    - release-notes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # NOTE: An environment so that the trusted publisher on PyPI can be
+    # NOTE: scoped to it, and so that a maintainer may put a required
+    # NOTE: reviewer in front of the one irreversible step here.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tox-lock/
+
+    permissions:
+      # NOTE: For the OIDC token PyPI trades for an upload one -- there
+      # NOTE: is deliberately no API token in this repository's secrets
+      # NOTE: to leak. The same token signs the PEP 740 attestations
+      # NOTE: `gh-action-pypi-publish` uploads alongside the dists.
+      id-token: write
+
+    steps:
+    # NOTE: By id, not by name: the id comes from the very upload step
+    # NOTE: that produced it, so this download cannot quietly start
+    # NOTE: meaning a different artifact than the one CI built.
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        artifact-ids: ${{ needs.ci.outputs.dists-artifact-id }}
+        path: dist/
+        merge-multiple: true
+
+    # v1.14.2
+    - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+
+  github-release:
+    name: 🏷️ Publish a GitHub Release
+    # NOTE: After PyPI rather than beside it. A tag with a GitHub
+    # NOTE: Release against it is what users read as "this version
+    # NOTE: exists", and it should not say so while the install command
+    # NOTE: underneath it is still failing.
+    needs:
+    - ci
+    - release-notes
+    - publish-to-pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      # NOTE: To create the release. Nothing here pushes a commit.
+      contents: write
+
+    steps:
+    # NOTE: Neither the tree nor an interpreter: everything this job
+    # NOTE: publishes was produced by a job the upload waited for, and
+    # NOTE: is fetched here by the id of the step that produced it.
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        artifact-ids: ${{ needs.ci.outputs.dists-artifact-id }}
+        path: dist/
+        merge-multiple: true
+
+    # v4.3.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        artifact-ids: ${{ needs.release-notes.outputs.artifact-id }}
+        path: ${{ runner.temp }}/notes/
+        merge-multiple: true
+
+    - name: Create the release and attach the dists to it
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # NOTE: Through the environment rather than interpolated into
+        # NOTE: the command: a `${{ }}` in a `run` block is pasted in
+        # NOTE: as text before the shell ever sees it, so a ref name
+        # NOTE: carrying a quote would be running the rest of itself.
+        # NOTE: Tag names are constrained, and whoever pushes one here
+        # NOTE: already holds write -- which makes this a habit worth
+        # NOTE: keeping rather than a hole worth patching.
+        RELEASE_TAG: ${{ github.ref_name }}
+        RELEASE_REPO: ${{ github.repository }}
+      run: >-
+        gh release create "${RELEASE_TAG}"
+        --repo "${RELEASE_REPO}"
+        --title "${RELEASE_TAG}"
+        --notes-file "${RUNNER_TEMP}/notes/release-notes.md"
+        --verify-tag
+        dist/*
+
+...

@@ -1,0 +1,799 @@
+[![SWUbanner]][SWUdocs]
+
+[![tox-dev badge]][tox-dev]
+[![GH Sponsors badge]][GH Sponsors URL]
+
+[SWUbanner]:
+https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner-direct-single.svg
+[SWUdocs]:
+https://github.com/vshymanskyy/StandWithUkraine/blob/main/docs/README.md
+
+[tox-dev]: https://github.com/tox-dev
+[tox-dev badge]:
+https://img.shields.io/badge/project-yellow?label=tox-dev&labelColor=c3cc39&color=7f833e
+
+[GH Sponsors badge]:
+https://img.shields.io/badge/%40webknjaz-transparent?logo=githubsponsors&logoColor=%23EA4AAA&label=Sponsor&color=2a313c
+[GH Sponsors URL]:
+https://github.com/sponsors/webknjaz
+
+
+# tox-lock
+
+A tox plugin providing a pre-configured dependency locking toxenv,
+backed by [uv].
+
+[uv]: https://docs.astral.sh/uv
+
+
+## Scope
+
+`tox` can already install from a lock, and so can [`tox-uv`]. Neither
+writes one, and neither notices when one has gone stale -- which is the
+whole of what this plugin does.
+
+- **`tox`'s own `pylock` option** (v4.44.0) takes a [PEP 751]
+  `pylock.toml` "as dependency input", mutually exclusive with `deps`.
+  It reads the file. Producing it is left to whatever wrote it.
+- **`tox-uv`'s `uv-venv-lock-runner`** runs `uv sync` against a
+  project's `uv.lock`. That is one lock, derived from `pyproject.toml`'s
+  own extras and dependency groups, and `deps` is ignored in such an
+  env. A repository whose linters, type checker, docs build and release
+  tooling each pin a different set has nowhere to put the other seven.
+- **This plugin** compiles each of those sets into its own lock and
+  fails a CI job when one no longer matches its sources. It is the
+  compile-and-verify half; both of the above are the install half, and
+  it is meant to be used with them rather than instead of them.
+
+So the output is deliberately a lock the other two can consume: a
+hash-pinned requirements file for `deps` or `constraints`, or -- when
+the lock is named `pylock.toml` -- a PEP 751 document for `tox`'s
+`pylock` (see [What the lock says about itself](#what-the-lock-says-about-itself)).
+
+What it is not: a resolver, a `uv.lock` replacement, or a lock format.
+`uv` does the resolving and owns the format; this plugin decides which
+sets get locked, with which options, and whether the result is current.
+
+[`tox-uv`]: https://github.com/tox-dev/tox-uv
+
+
+## Requirements
+
+`tox >= 4.55.1`. The plugin is built on the `tox_extend_envs` hook
+(v4.30) and on core config declared as a mapping of lists (v4.31), but
+it reads `tox`'s override map through the accessor that became public in
+v4.55.1 -- which is how `-x testenv:lock-deps.deps=...` reaches an env
+nobody wrote a section for.
+
+One thing arrives later still: `tox` only began expanding the
+substitutions inside an override's *value* in v4.62.0, so
+`-x testenv:lock-deps.deps={env:LOCK_PIN}` keeps its braces under
+anything older. That is `tox`'s own behaviour for every env rather than
+this plugin's, so it is not part of the requirement above -- a project
+meets it the same way whichever env it overrides.
+
+CI runs the whole test suite against that floor, not just against
+whatever `tox` is newest, in an `oldest-tox` env that pins it.
+
+
+## Usage
+
+Add `tox-lock` to your project's `tox` requirements -- either
+in `tox.toml`:
+
+```toml
+requires = [
+  "tox-lock",
+]
+```
+
+...or in `tox.ini`:
+
+```ini
+[tox]
+requires =
+  tox-lock
+```
+
+Naming it there rather than only installing it matters: `tox` does not
+refuse a config whose plugin is missing. It ignores the core settings it
+does not recognise and, for an env no section declares, runs `[testenv]`
+under that name instead -- so `tox run -e lock-deps-check` would report
+success having run whatever the default env does.
+
+Then invoke the env the plugin exposes:
+
+```console
+$ tox run -q -e lock-deps                     # write a hash-pinned requirements.txt
+$ tox run -q -e lock-deps -- --upgrade        # pass args through to `uv pip compile`
+$ tox run -q -e lock-deps -- --python 3.10    # lock for a specific interpreter
+$ tox run -q -e lock-deps --lock-file requirements/test.txt   # just the one lock
+```
+
+The lock is hash-pinned (`--generate-hashes`) and written whole on
+every run, so there is no stale-artifact cleanup step to remember.
+
+
+## Keeping the lock honest
+
+A lock is only worth as much as the last time somebody remembered to
+recompile it. The plugin exposes a second env for CI to say so out
+loud:
+
+```console
+$ tox run -q -e lock-deps-check
+```
+
+Each env carries a label of its own -- `lock` and `lock-check` -- so a
+CI job selects something renameable rather than an env name it has to
+keep in step with this plugin:
+
+```console
+$ tox run -q -m lock-check
+```
+
+The two are deliberately *not* grouped under one label: one writes the
+lock and the other asserts that writing it would change nothing, so a
+label selecting both picks a pair whose second half its first has
+already made vacuous -- and under `tox run-parallel` the writer would
+be rewriting the file the checker is reading.
+
+It recompiles the same sources with the same options into a scratch
+file under the tox temp dir, compares the result against your lock,
+and exits non-zero if they differ. Your lock file is never written to,
+so a failing check tells you to run `lock-deps` -- it does not quietly
+do it for you on a machine that was only meant to be looking.
+
+The comparison is made on the whole file. `uv` writes the header, the
+`# via` annotations and the pins, and both envs seed the same
+[`--custom-compile-command`](#what-the-lock-says-about-itself) -- so
+the header your lock carries is the header a recompile produces, and
+there is nothing the check has to excuse itself from reading. A
+requirement moved from one of a lock's sources to another is drift
+whose pins all hold still: only the annotation beside it changes, and
+a comparison that skipped comments would pass on a lock `lock-deps`
+goes on to rewrite.
+
+A failing check prints a unified diff of what moved, so the CI log
+that reports the staleness also says what it consists of:
+
+```diff
+--- requirements.txt (locked)
++++ requirements.txt (recompiled)
+@@ -1,4 +1,5 @@
+ # This file was autogenerated by uv via the following command:
+ #    tox run -e lock-deps
+-attrs==24.2.0
++attrs==25.1.0
+ idna==3.10
++sniffio==1.3.1
+```
+
+Every configured lock is compared by one invocation rather than one
+each, so a project with several of them learns about all the drift in
+a single run -- `commands` stop at the first failure, and a comparison
+per lock would report the earliest stale one and say nothing about the
+rest.
+
+A lock that will not compile at all is a different matter, and the two
+envs part company over it. `lock-deps` carries on: the locks are
+independent artefacts, so a source `uv` cannot resolve fails the run
+without costing you the ones after it -- otherwise a scheduled
+`lock-deps -- --upgrade` job would report one failure a week and
+quietly renew nothing. `lock-deps-check` stops instead. It recompiles
+into a copy of your lock, so a compile that never ran leaves a scratch
+file identical to the lock it was copied from, and carrying on would
+have the comparison report the one lock it could not recompile as
+current. A source that will not compile is a broken configuration
+rather than drift, `uv` names the file, and the check declines to
+vouch for what it did not check.
+
+That asymmetry is a seeded default on the writer and a fixture of the
+checker. A project preferring the first failure to end the run says
+so the ordinary way:
+
+```ini
+[testenv:lock-deps]
+ignore_errors = false
+```
+
+...and saying the opposite there does not reach the check, which
+inherits that section for everything except what this plugin owns.
+
+The recompile starts from a copy of the current lock, so the check
+reports *drift* -- your lock no longer matching the sources it claims
+to come from -- rather than the mere existence of a newer release
+upstream. To ask that other question, pass the arguments for it:
+
+```console
+$ tox run -q -e lock-deps-check -- --upgrade   # would upgrading change anything?
+```
+
+
+## What the lock says about itself
+
+`uv` opens every lock it writes with a header naming the command that
+produced it, so that whoever finds the file later knows how to
+regenerate it. Left to itself it would name the invocation this plugin
+builds -- a `python -Werror -m uv pip compile` line, going around the
+pinned `uv`, the passed-through index configuration and every setting
+above -- and, in the check env, one pointed at a scratch file under the
+tox temp dir. Both envs therefore name the env instead:
+
+```python
+# This file was autogenerated by uv via the following command:
+#    tox run -e lock-deps
+```
+
+A project that regenerates its lock through something else of its own
+says so, and the seeded header steps aside rather than duplicating the
+option, which `uv` refuses outright:
+
+```ini
+[tox]
+lock_options = --custom-compile-command "make lock"
+```
+
+The setting rather than the arguments after `--`, because both envs
+read it: a header named for one invocation lands in the lock and is
+then drift the next `lock-deps-check` reports, the comparison being
+made on the whole file.
+
+
+## Using the lock
+
+Installing from a lock needs nothing from this plugin -- `tox` already
+takes a requirements file:
+
+```ini
+[testenv]
+deps = -r requirements.txt
+```
+
+A project that would rather name the path once gives it a section of
+its own and references it from both ends, which is stock tox:
+
+```ini
+[tox]
+lock_files = {[lock]test} = requirements/test.in
+
+[lock]
+test = requirements/test.txt
+
+[testenv]
+deps = -r {[lock]test}
+```
+
+What a lock governs, though, is `deps` and nothing else. `tox` installs
+a packaged project in two pip invocations -- the requirements it was
+told about, and then the `dependencies` the project's own metadata
+declares -- and the second is resolved against the index with neither
+the lock's pins nor its hashes in hand:
+
+```console
+py: install_deps> python -I -m pip install -r requirements/test.txt
+py: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+So a lock pinning `httpx==0.27.2`, hashes and all, leaves that env
+running whatever the index offers for `httpx>=0.28`, and says nothing
+about it -- nothing there failed. The guard is stock tox, and it ships
+off:
+
+```ini
+[testenv]
+deps = -r {[lock]test}
+constrain_package_deps = true
+```
+
+That hands the lock's own pins to the second invocation as
+constraints, so a project whose metadata has outgrown its lock gets a
+resolution error naming both sides rather than a quiet upgrade past
+it. Worth writing even where the lock covers everything today: what
+moves is a floor in `pyproject.toml`, and the pin it steps over is the
+one somebody chose deliberately.
+
+Covering those dependencies at all is the other half, and that is
+`lock_files`' job. A lock compiled out of the project's own
+`pyproject.toml` -- the default here, and what `--extra` is for --
+names them; one compiled out of `requirements/*.in` alone names only
+what those files list, and the rest arrive by the second invocation
+above.
+
+That line does not reach a [PEP 751] lock, and a project keeping one
+installs from it differently. `deps` will not read a `pylock.toml`;
+`tox` has a key of its own for it, and refuses an env naming both:
+
+```ini
+[testenv]
+pylock = pylock.toml
+```
+
+What `constrain_package_deps` hands the second invocation is a
+constraints file `tox` writes while installing `deps` -- and a `pylock`
+env never installs any, so the file is never there and the option is a
+no-op:
+
+```console
+app: install_pylock> python -I -m pip install --no-deps -r .tox/app/pylock.txt
+app: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+That is the hole `constrain_package_deps` closes above, reopened with
+the guard switched on and nothing said about it. `constraints` is the way in, and
+it takes a requirements file, so the lock gets a sibling out of the
+same sources:
+
+```ini
+[tox]
+lock_files =
+    pylock.toml = requirements.in
+    constraints.txt = requirements.in
+
+[testenv]
+pylock = pylock.toml
+constraints = {tox_root}/constraints.txt
+constrain_package_deps = true
+```
+
+Two locks out of one source is what it costs, and `lock-deps-check`
+compiles both, so they cannot drift apart unnoticed. Name the path
+absolutely: `tox` hands the entry to `pip` as written, and an env with
+a `change_dir` resolves a relative one somewhere else.
+
+There is a third invocation, and it runs before either of those. A
+packaged project has to be built before it can be installed, and `tox`
+builds it in a packaging env of its own, into which it installs
+whatever `[build-system] requires` names so that the backend exists at
+all:
+
+```console
+.pkg: install_requires> python -I -m pip install 'setuptools>=77' 'setuptools-scm>=8'
+py: install_deps> python -I -m pip install -r requirements/test.txt
+py: install_package_deps> python -I -m pip install 'httpx>=0.28'
+```
+
+No lock reaches the first line. `constrain_package_deps` is read where
+the *package's* metadata dependencies are installed, which is the
+third; and `deps` -- the key every other env carries its lock on --
+`tox` refuses on a PEP 517 packaging env outright, because what is
+needed to build is the backend's to declare rather than the project's
+to list. So a tree whose every other install is hash-pinned still
+resolves its build backend from the index, on every machine, and the
+code that runs first in the build is the code nothing pinned.
+
+`constraints` is the way in here too, on `[pkgenv]`, which is the
+section naming that env:
+
+```ini
+[tox]
+lock_files =
+    requirements/build-backend.txt = requirements/build-backend.in
+lock_build_requires =
+    requirements/build-backend.in = pyproject.toml
+
+[pkgenv]
+constraints = {tox_root}/requirements/build-backend.txt
+```
+
+The source is a mirror of `[build-system] requires` rather than the
+table itself: `uv pip compile pyproject.toml` reads `[project]
+dependencies`, and there is no option asking it for the other one.
+`lock_build_requires` is the second line above, and it is what keeps
+that mirror from being a copy nobody compares -- `lock-deps` writes it
+from the table before compiling the lock out of it, and
+`lock-deps-check` reports the two drifting apart. Without it the
+mirror is hand-written, and a backend requirement added to the table
+goes on being resolved from the index because the copy was not
+touched.
+
+The mirror is a generated file that belongs in the repository, the
+way the lock compiled from it does: `[pkgenv]` reads the lock on a
+fresh clone, before anything has had a chance to write either.
+
+What the constraint carries is the pins and not the hashes: `pip`
+reads a constraints file for versions and ignores the `--hash` lines
+beside them, whichever lock they came out of. Pinning the backend
+closes the question of *which* release builds your project; it does
+not put that build under hash checking.
+
+An env that would rather not install from a stale lock has CI ask the
+question alongside it. That takes two lines, and the first is the one
+worth being careful about:
+
+```ini
+[tox]
+env_list =
+  lock-deps-check
+  tests
+
+[testenv:tests]
+depends = lock-deps-check
+deps = -r {[lock]test}
+```
+
+`env_list` is what puts the check in the run. `depends` only says
+where in it -- an entry naming an env the invocation was not asked
+about is passed over without a word, so the `depends` line on its own
+is a guard that never fires, on a lock nothing ever looked at. Being
+silent is what makes it worth spelling out: an unfired guard and a
+current lock read identically from the outside.
+
+Two more things it does not do, both of which shape what the pair
+above is worth. It resolves env *names*, so the labels are no use in
+it: `depends = lock-check` is exactly the entry tox passes over. And
+it orders rather than gates -- a failing `lock-deps-check` leaves the
+env that depends on it to run anyway, against the stale lock, under
+`tox run` and `tox run-parallel` alike.
+
+So what the ordering buys is not a lock the tests never see: it is the
+diff reaching the CI log ahead of the failures it explains. What makes
+the run red is the check's own exit code, which it would have
+contributed whatever order it ran in.
+
+
+## Configuration
+
+By default the lock is compiled out of `pyproject.toml` into
+`requirements.txt`, both relative to the tox root. Projects that keep
+theirs elsewhere say so in the core section rather than restating the
+whole command:
+
+```ini
+[tox]
+lock_files = requirements/base.txt = requirements/base.in
+```
+
+`lock_files` maps each lock to the sources it is compiled from, so a
+project whose dependencies do not come as one set gets a lock per set
+rather than a single lock that is the union of all of them. This
+plugin's own [`tox.ini`] names one per env it installs anything into.
+That list is not reproduced here: a copy of it in this file went stale
+the first time an env was added, and the file it was copied from is
+one click away.
+
+[`tox.ini`]: https://github.com/tox-dev/tox-lock/blob/main/tox.ini
+
+`uv pip compile` writes one output per invocation, so `lock-deps` runs
+one per entry -- and compiles the union of however many sources an
+entry names. They are comma-separated in `tox.ini`, an array in
+`tox.toml`:
+
+```ini
+[tox]
+lock_files =
+  requirements/base.txt = requirements/base.in
+  requirements/test.txt = requirements/base.in, requirements/test.in
+```
+
+```toml
+lock_files = { "requirements/base.txt" = ["requirements/base.in"] }
+```
+
+The mapping is keyed by the lock rather than by its sources because
+only the lock is unique -- one `requirements/base.in` legitimately
+feeds both `base.txt` and `test.txt` above, and a mapping keyed the
+other way would silently drop one of them.
+
+A project with several of them rarely wants to recompile all of them at
+once. `--lock-file` names the ones an invocation is about, and takes
+the path exactly as `lock_files` spells it:
+
+```console
+$ tox run -q -e lock-deps --lock-file requirements/test.txt -- --upgrade-package attrs
+$ tox run -q -e lock-deps-check --lock-file requirements/test.txt
+```
+
+It is repeatable, and every configured lock is the default -- so a
+plain `tox run -e lock-deps` keeps doing what it did. Both envs read
+it: narrowing a check is how CI asks about one lock without waiting on
+the resolution of the rest.
+
+A command-line option rather than a setting, because it says nothing
+about the project -- `lock_files` has already said which locks there
+are. And a name that setting does not declare is refused rather than
+quietly matching nothing, which would have `lock-deps-check` pass
+without having compared a single lock:
+
+```console
+$ tox run -q -e lock-deps --lock-file requirements/dev.txt
+ROOT: HandledError| `--lock-file` names requirements/dev.txt, which
+`lock_files` does not declare. It declares requirements/base.txt,
+requirements/test.txt. [...]
+```
+
+The selection is compiled in the order `lock_files` declares, not the
+order it is typed in: that order is the project's, and a lock compiled
+under a `--constraint` naming another has to be written after it.
+
+`uv` reads the lock's *format* off its file name, so naming it is
+also how a project picks one. A lock called `pylock.toml` -- or
+`pylock.<name>.toml` -- is written as a [PEP 751] document; anything
+else is written as a `requirements.txt` one:
+
+```ini
+[tox]
+lock_files = pylock.toml = pyproject.toml
+```
+
+Both envs work the same way on either, `lock-deps-check` included: it
+compiles into a scratch file that keeps the lock's own name, so it
+produces the same format it is comparing against. There is no format
+setting here to keep in step with the file name, because there is
+nothing a format setting could say that the name does not.
+
+Installing from one is where the two formats part company -- see
+[Using the lock](#using-the-lock), which is also where the guard a
+`pylock.toml` does not get is.
+
+[PEP 751]: https://peps.python.org/pep-0751/
+
+Emptying the setting is refused rather than obeyed: it would leave
+`lock-deps` compiling nothing and `lock-deps-check` passing every time
+without having checked anything, which is a green CI job asserting
+that no lock is stale by virtue of there being none. A project that
+wants neither env drops `tox-lock` from its `requires` instead.
+
+The options `uv pip compile` is invoked with are settable the same
+way. The setting names what your project *adds*, one option per line,
+value included:
+
+```ini
+[tox]
+lock_options =
+  --universal
+  --no-annotate
+```
+
+`--generate-hashes` is not among them and does not have to be:
+`tox-lock` seeds it, and adding an option of your own no longer costs
+you it. A project that cannot pin hashes -- one depending on a direct
+URL or an editable checkout -- declines it in `uv`'s own spelling:
+
+```ini
+[tox]
+lock_options =
+  --no-generate-hashes
+```
+
+...which says which option is being turned off, and leaves every other
+one in the list where it was. Naming `--generate-hashes` outright
+works too, and is not read as a duplicate: the seed withdraws the
+moment either spelling appears, in this setting or after `--`.
+
+Each line is split the way the platform's own shell splits a command
+line, so a value quoted for the space in it keeps that space -- and a
+Windows path keeps its backslashes rather than losing them to an
+escape nobody wrote.
+
+A lock over a build backend is the one case where a source is not a
+file the project wrote. `uv pip compile` reads `[project]
+dependencies` out of a `pyproject.toml` and has no option asking it
+for `[build-system] requires`, so that lock is compiled out of a
+mirror of the table -- and `lock_build_requires` says which file is a
+mirror of which table:
+
+```ini
+[tox]
+lock_files =
+  requirements/build-backend.txt = requirements/build-backend.in
+lock_build_requires =
+  requirements/build-backend.in = pyproject.toml
+```
+
+`lock-deps` writes the mirror before compiling from it, and
+`lock-deps-check` recompiles it into scratch and reports the
+difference -- so a requirement added to the table lands in the lock,
+and a mirror somebody edited by hand is drift rather than a silent
+disagreement. `--lock-file` narrows both: a mirror follows the lock it
+feeds, and a run about some other lock leaves it alone.
+
+Keyed by the file written rather than by the table read, like
+`lock_files` and for the same reason -- one `pyproject.toml` may be
+mirrored into more than one file. A mirror no lock is compiled from is
+refused rather than written: what it would otherwise be is a file kept
+faithfully current that nothing installs from, under a green
+`lock-deps-check`.
+
+Pinning a backend is what the mirror is for -- see [Using the
+lock](#using-the-lock) for the `[pkgenv]` half, which is the half that
+makes it do anything.
+
+`lock_options` says how this *project* resolves, so every lock is
+compiled with it. An option that belongs to one lock alone goes in
+`lock_file_options`, keyed by the lock the way `lock_files` is:
+
+```ini
+[tox]
+lock_files =
+  requirements/base.txt = pyproject.toml
+  requirements/test.txt = pyproject.toml
+lock_file_options =
+  requirements/test.txt = --extra test
+```
+
+Two locks out of the same `pyproject.toml`, one of them carrying the
+test extra, is the ordinary shape of a project that keeps its
+dependencies in metadata rather than in `requirements/*.in` -- and
+`--extra test` in `lock_options` would put `pytest` and everything
+under it into the lock a deployment installs from.
+
+One lock is one entry, so a lock carrying several options names them
+all on its own line -- `requirements/test.txt = --extra test --extra
+docs` -- where `lock_options`, being a plain list, takes one per line.
+
+An entry is added to whatever `lock_options` already asked for, and
+read after it, so an option `uv` lets repeat accumulates with the
+narrower say last. That also makes a seeded default declinable for one
+lock alone -- the single dependency reachable only by URL costs that
+lock its hashes and leaves the rest of the project pinned:
+
+```ini
+[tox]
+lock_file_options =
+  requirements/dev.txt = --no-generate-hashes
+```
+
+Both envs read it, and that is the point of it being a setting.
+Saying the same thing per invocation -- `--lock-file requirements/test.txt
+-- --extra test` -- writes the right lock and leaves `lock-deps-check`
+recompiling it without the extra ever after, so the check reports
+drift that a plain `tox run -e lock-deps` then "fixes" by throwing the
+extra away.
+
+A key naming a lock `lock_files` does not declare is refused rather
+than ignored, for the same reason `--lock-file` refuses one: the
+option would go nowhere, the lock it was meant for would compile
+without it, and the run those two settings disagree in would exit
+zero.
+
+Every setting above is a default, and a default steps aside when a
+project names the same option for itself. `--output-file` is the one
+exception -- it is not a default but the argument that tells the two
+envs apart, the writer compiling into your lock and the check into a
+scratch file it throws away. Naming it would point the *check* at the
+real lock and have it rewrite the very file it was asked to confirm
+was already correct. So it is refused, in either spelling, wherever it
+comes from:
+
+```console
+$ tox run -q -e lock-deps-check -- -o requirements.txt
+ROOT: HandledError| `--output-file` is `tox-lock`'s to set and cannot
+come from the arguments after `--`: [...] Set the `lock_files` core
+setting instead.
+```
+
+The resolver itself is an input to the lock as much as the sources
+are: two `uv` releases can pin the same requirements differently, and
+a check running a newer `uv` than the machine that wrote the lock
+reports drift that is not there. It is settled in the env's own
+section, and the check env inherits it:
+
+```ini
+[testenv:lock-deps]
+deps = uv == 0.9.2
+```
+
+That is stock tox configuration, not a setting this plugin invented:
+`lock-deps-check` takes `[testenv:lock-deps]` as its
+[`base`](https://tox.wiki/en/stable/config.html#base), so anything a
+project sets on the env it thinks of as "the lock env" -- the
+resolver, the interpreter, `set_env`, `pass_env` -- is set for the
+check as well. `base` is not chained in tox, so `[testenv]` stays out
+of both regardless. What the plugin owns is not inherited: the
+commands, the description and the labels telling the two envs apart
+stay as seeded however the writer is configured, and the check env's
+own `[testenv:lock-deps-check]` section still has the last word over
+both.
+
+One thing does not follow the inheritance: a `-x` override. `-x
+testenv:lock-deps.deps=uv==0.9.4` reaches the writer alone, because
+the check env inherits a config *section* and an override is not one.
+Run both envs off a one-off pin and the pin needs naming twice.
+
+Pinning the resolver settles what a lock records; it does not make
+that lock installable anywhere else. A project whose CI matrix
+installs *one* lock on several platforms wants the resolution to cover
+all of them, which is `uv`'s job rather than tox's:
+
+```ini
+[tox]
+lock_options =
+  --universal
+```
+
+`--universal` resolves across platforms and interpreters and writes
+the environment markers that sort the result back out at install time.
+
+The Python floor that resolution stops at does not have to be said.
+`tox-lock` reads `requires-python` out of the project's
+`pyproject.toml` and hands `uv` a `--python-version` off it, because
+`uv` will not: left alone it resolves for whichever interpreter
+`lock-deps` happened to run under -- and it does that even when the
+`pyproject.toml` declaring `requires-python` is the file being
+compiled. The lock is otherwise an artefact of the machine that wrote
+it, and `lock-deps-check` reports drift on every machine whose Python
+differs from that one.
+
+Like every other default here it withdraws when contradicted: name
+`--python-version`, `--python` or `-p` in `lock_options` or after `--`
+and the seeded floor is not added. A project that declares no
+`requires-python` gets no option seeded either.
+
+The platform axis is deliberately left alone. `--universal` changes
+what a lock *contains* -- pins for machines the project may never
+deploy to -- and a lock aimed at a single target is a legitimate thing
+to want. A Python floor is the other kind of question: the project had
+already answered it, and nothing was reading the answer.
+
+`uv` reads its own configuration -- the index to resolve against,
+how to authenticate to it, which certificates to trust -- out of the
+environment, and `tox` passes none of it through by default: its
+allowlist covers `PIP_*`, which is the wrong resolver. Both lock envs
+therefore pass `UV_*` unconditionally, so a project locking against a
+private index does not have to say so. Whatever else the index
+authenticates with is named alongside it:
+
+```ini
+[tox]
+lock_pass_env = MY_INDEX_TOKEN
+```
+
+That setting adds to `UV_*` rather than replacing it, the way
+`pass_env` adds to tox's own defaults -- and so does a `pass_env` of
+your own, wherever you write it. A section wins a config key outright
+in tox, so `[testenv:lock-deps]` with a `pass_env` in it would
+otherwise take the resolver's environment away along with everything
+else: a lock run that has quietly stopped seeing `UV_INDEX` resolves
+against PyPI having been asked for a private index, and says nothing
+about it. Both names come back through the same `post_process` hook
+tox appends its own `PIP_*` with, after every section and every `-x`
+override has had its say, so neither can be replaced by accident.
+
+The labels are settable too, in each env's own section -- renamed to
+fit a project's existing scheme, or emptied to opt out of labelling
+altogether:
+
+```ini
+[testenv:lock-deps]
+labels = pins
+
+[testenv:lock-deps-check]
+labels = pins-audit
+```
+
+Labels are the one env setting deliberately left out of the
+inheritance above: a single label over a writer and a check selects a
+pair whose second half is made vacuous by its first, and under `tox
+run-parallel` the writer rewrites the very file the check is reading.
+A project that wants them as one group says so by naming the same
+label in both sections -- that choice is just not the default.
+
+Substitutions work in all of these, core settings and env sections
+alike -- for instance, `lock_files = {env:LOCK_FILE:requirements.txt}
+= pyproject.toml`.
+
+One-off options do not need a config change at all -- pass them after
+`--`, where they are appended last. `uv` accumulates the options it
+lets repeat -- `--upgrade-package`, `--extra`, `--constraint` -- and
+rejects the ones it does not rather than taking the last, so an option
+already named in `lock_options` is changed there rather than argued
+with on the command line.
+
+Both envs read the same settings for what the lock is made of, so a
+project configures its lock once and the check follows.
+
+The plugin's settings sit either side of your own env section, by what
+they are. What it owns -- the commands, the labels, the description --
+outranks the section it inherits; what it merely defaults -- the
+resolver, the interpreter, the environment to pass -- falls below it.
+Either way, `[testenv]` never leaks in, an `[testenv:lock-deps]`
+section wins the keys it names, and `-x testenv:lock-deps.<key>=...`
+wins over both -- whether or not the project declares that section at
+all. Keys left unset keep the plugin's defaults:
+
+```ini
+[testenv:lock-deps]
+deps = pip-tools
+commands = pip-compile --generate-hashes -o requirements.txt pyproject.toml
+```

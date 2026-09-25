@@ -1,0 +1,20 @@
+# The linters whose suppression comments and directives the tree has
+# carried since its first commit: `# noqa` codes in `src/` and
+# `tests/`, and a `# yamllint disable-line` over the `on:` key in the
+# CI workflow. Neither tool ran until the `lint` env in `tox.ini` gave
+# them somewhere to run from.
+#
+# Standalone rather than compiled together with `test.in`: unlike
+# `mypy`, none of these resolves the suite's imports, so what they see
+# does not depend on what is installed alongside them.
+#
+# The two below read the CI workflows, which until now no gate opened
+# beyond `yamllint` checking that they were well-formed YAML. `zizmor`
+# audits them for the ways a workflow leaks a token or runs somebody
+# else's code; `check-jsonschema` validates them against GitHub's own
+# schema -- catching, locally, the class of typo that otherwise only
+# surfaces on a trigger that cannot be fired from a branch.
+check-jsonschema
+ruff
+yamllint
+zizmor

@@ -1,0 +1,1 @@
+Installing a packaged project from a lock did not cover the project's own dependencies: `tox` resolves those in a second `pip` invocation, against the index, with neither the lock's pins nor its hashes. The README now names the trap and the stock-tox guard for it (`constrain_package_deps = true`), and this project sets it.
