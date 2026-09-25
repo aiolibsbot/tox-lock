@@ -26,6 +26,37 @@ backed by [uv].
 [uv]: https://docs.astral.sh/uv
 
 
+## Scope
+
+`tox` can already install from a lock, and so can [`tox-uv`]. Neither
+writes one, and neither notices when one has gone stale -- which is the
+whole of what this plugin does.
+
+- **`tox`'s own `pylock` option** (v4.44.0) takes a [PEP 751]
+  `pylock.toml` "as dependency input", mutually exclusive with `deps`.
+  It reads the file. Producing it is left to whatever wrote it.
+- **`tox-uv`'s `uv-venv-lock-runner`** runs `uv sync` against a
+  project's `uv.lock`. That is one lock, derived from `pyproject.toml`'s
+  own extras and dependency groups, and `deps` is ignored in such an
+  env. A repository whose linters, type checker, docs build and release
+  tooling each pin a different set has nowhere to put the other seven.
+- **This plugin** compiles each of those sets into its own lock and
+  fails a CI job when one no longer matches its sources. It is the
+  compile-and-verify half; both of the above are the install half, and
+  it is meant to be used with them rather than instead of them.
+
+So the output is deliberately a lock the other two can consume: a
+hash-pinned requirements file for `deps` or `constraints`, or -- when
+the lock is named `pylock.toml` -- a PEP 751 document for `tox`'s
+`pylock` (see [What the lock says about itself](#what-the-lock-says-about-itself)).
+
+What it is not: a resolver, a `uv.lock` replacement, or a lock format.
+`uv` does the resolving and owns the format; this plugin decides which
+sets get locked, with which options, and whether the result is current.
+
+[`tox-uv`]: https://github.com/tox-dev/tox-uv
+
+
 ## Requirements
 
 `tox >= 4.55.1`. The plugin is built on the `tox_extend_envs` hook
