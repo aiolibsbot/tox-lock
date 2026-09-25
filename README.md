@@ -338,18 +338,27 @@ section naming that env:
 [tox]
 lock_files =
     requirements/build-backend.txt = requirements/build-backend.in
+lock_build_requires =
+    requirements/build-backend.in = pyproject.toml
 
 [pkgenv]
 constraints = {tox_root}/requirements/build-backend.txt
 ```
 
-The source is a copy of `[build-system] requires` rather than the
+The source is a mirror of `[build-system] requires` rather than the
 table itself: `uv pip compile pyproject.toml` reads `[project]
-dependencies`, and there is no option asking it for the other one. A
-copy nothing compares is how a backend requirement added in one file
-goes on being resolved from the index because the other was not
-touched, so a project taking this on is signing up to keep the two in
-step -- this repository does it with a test.
+dependencies`, and there is no option asking it for the other one.
+`lock_build_requires` is the second line above, and it is what keeps
+that mirror from being a copy nobody compares -- `lock-deps` writes it
+from the table before compiling the lock out of it, and
+`lock-deps-check` reports the two drifting apart. Without it the
+mirror is hand-written, and a backend requirement added to the table
+goes on being resolved from the index because the copy was not
+touched.
+
+The mirror is a generated file that belongs in the repository, the
+way the lock compiled from it does: `[pkgenv]` reads the lock on a
+fresh clone, before anything has had a chance to write either.
 
 What the constraint carries is the pins and not the hashes: `pip`
 reads a constraints file for versions and ignores the `--hash` lines
@@ -525,6 +534,39 @@ Each line is split the way the platform's own shell splits a command
 line, so a value quoted for the space in it keeps that space -- and a
 Windows path keeps its backslashes rather than losing them to an
 escape nobody wrote.
+
+A lock over a build backend is the one case where a source is not a
+file the project wrote. `uv pip compile` reads `[project]
+dependencies` out of a `pyproject.toml` and has no option asking it
+for `[build-system] requires`, so that lock is compiled out of a
+mirror of the table -- and `lock_build_requires` says which file is a
+mirror of which table:
+
+```ini
+[tox]
+lock_files =
+  requirements/build-backend.txt = requirements/build-backend.in
+lock_build_requires =
+  requirements/build-backend.in = pyproject.toml
+```
+
+`lock-deps` writes the mirror before compiling from it, and
+`lock-deps-check` recompiles it into scratch and reports the
+difference -- so a requirement added to the table lands in the lock,
+and a mirror somebody edited by hand is drift rather than a silent
+disagreement. `--lock-file` narrows both: a mirror follows the lock it
+feeds, and a run about some other lock leaves it alone.
+
+Keyed by the file written rather than by the table read, like
+`lock_files` and for the same reason -- one `pyproject.toml` may be
+mirrored into more than one file. A mirror no lock is compiled from is
+refused rather than written: what it would otherwise be is a file kept
+faithfully current that nothing installs from, under a green
+`lock-deps-check`.
+
+Pinning a backend is what the mirror is for -- see [Using the
+lock](#using-the-lock) for the `[pkgenv]` half, which is the half that
+makes it do anything.
 
 `lock_options` says how this *project* resolves, so every lock is
 compiled with it. An option that belongs to one lock alone goes in

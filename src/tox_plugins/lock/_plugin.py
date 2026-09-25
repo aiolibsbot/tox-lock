@@ -40,6 +40,14 @@ if _t.TYPE_CHECKING:
     # NOTE: `_selected_lock_files`.
     _SelectedLock: _t.TypeAlias = tuple[int, Path, _c.Sequence[Path]]
 
+    # NOTE: One configured mirror as the seeding code needs it:
+    # NOTE: its position in the whole `lock_build_requires`
+    # NOTE: mapping, the file it writes, and the requirements to
+    # NOTE: write there. The position travels with it for the
+    # NOTE: reason it does above -- a narrowed run must name the
+    # NOTE: scratch file the same way a full one does.
+    _SelectedMirror: _t.TypeAlias = tuple[int, Path, _c.Sequence[str]]
+
 
 _ENV_NAME = 'lock-deps'
 _CHECK_ENV_NAME = f'{_ENV_NAME}-check'
@@ -102,6 +110,32 @@ _DEFAULT_LOCK_FILES = {Path('requirements.txt'): [Path('pyproject.toml')]}
 # NOTE: throwing the extra away. A setting the checker reads too is the
 # NOTE: only spelling both envs can agree on.
 _DEFAULT_LOCK_FILE_OPTIONS: dict[Path, list[str]] = {}
+
+# NOTE: `uv pip compile pyproject.toml` reads `[project]
+# NOTE: dependencies` and there is no option asking it for
+# NOTE: `[build-system] requires`, so the lock pinning a build
+# NOTE: backend -- the install `tox` refuses `deps` on, and the one
+# NOTE: that runs before every other -- is compiled out of a mirror
+# NOTE: of that table. Left to the project that mirror is a copy
+# NOTE: nothing compares, which is how a requirement added to the
+# NOTE: table goes on being resolved from the index because the
+# NOTE: copy was not touched. An unpinned install and a pinned one
+# NOTE: read alike, so nothing says so.
+#
+# NOTE: Keyed by the file written rather than by the table read,
+# NOTE: like `lock_files` and for the same reason: one
+# NOTE: `pyproject.toml` may legitimately be mirrored into more
+# NOTE: than one file, and a mapping keyed the other way would
+# NOTE: silently drop all but the last.
+#
+# NOTE: Empty by default: a project that keeps no lock over its
+# NOTE: build backend has no mirror to write, and one written
+# NOTE: unasked would arrive in the work tree of every project
+# NOTE: installing this plugin.
+_DEFAULT_BUILD_REQUIRES: dict[Path, Path] = {}
+
+_BUILD_SYSTEM_TABLE = 'build-system'
+_BUILD_SYSTEM_REQUIRES = 'requires'
 
 # NOTE: A command-line option rather than a core setting, because it
 # NOTE: does not say anything about the project -- `lock_files` already
@@ -305,6 +339,7 @@ _CHECK_LABELS = ('lock-check',)
 _SCRIPTS_DIR = Path(__file__).parent
 _CHECK_SEED_SCRIPT = _SCRIPTS_DIR / '_check_seed.py'
 _CHECK_COMPARE_SCRIPT = _SCRIPTS_DIR / '_check_compare.py'
+_BUILD_REQUIRES_SCRIPT = _SCRIPTS_DIR / '_build_requires.py'
 
 
 class _NoSectionReference(ReplaceReference):
@@ -503,6 +538,83 @@ def _selected_lock_files(
         )
 
     return [entry for entry in declared if entry[1] in wanted]
+
+
+def _build_system_requires(tox_root: Path, source: Path) -> list[str]:
+    """Read what a project declares its build backend needs.
+
+    Refused rather than guessed at when the table is not there or does
+    not hold a list of requirement strings. Saying nothing would leave
+    the mirror emptied and the lock it feeds compiled out of an empty
+    file -- a backend pinned to nothing, which reads from a CI log
+    exactly like a backend pinned correctly.
+
+    :param tox_root: The directory a relative source is resolved from.
+    :param source: The metadata file naming the build requirements.
+    :returns: The requirements ``[build-system] requires`` names.
+    :raises HandledError: If the table cannot be read.
+    """
+    source_file = source if source.is_absolute() else tox_root / source
+    try:
+        metadata = tomllib.loads(source_file.read_text(encoding='utf-8'))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise HandledError(
+            f'`lock_build_requires` names {source} as the source of a '
+            f'build backend lock, and it could not be read: {error}.',
+        ) from error
+
+    build_system = metadata.get(_BUILD_SYSTEM_TABLE)
+    requires = (
+        build_system.get(_BUILD_SYSTEM_REQUIRES)
+        if isinstance(build_system, dict)
+        else None
+    )
+    if not isinstance(requires, list) or not all(
+        isinstance(requirement, str) for requirement in requires
+    ):
+        raise HandledError(
+            f'`lock_build_requires` names {source} as the source of a '
+            f'build backend lock, and it declares no `[{_BUILD_SYSTEM_TABLE}] '
+            f'{_BUILD_SYSTEM_REQUIRES}` to mirror. Mirroring nothing would '
+            f'leave that lock compiled out of an empty file, which pins the '
+            f'backend to nothing and reports success either way.',
+        )
+
+    return requires
+
+
+def _selected_build_requires(
+    build_requires: _c.Mapping[Path, Path],
+    selected_locks: _c.Sequence[_SelectedLock],
+    tox_root: Path,
+) -> list[_SelectedMirror]:
+    """Pick out the mirrors the selected locks are compiled from.
+
+    A mirror is a source, and ``--lock-file`` names locks -- so
+    narrowing an invocation to a lock some mirror does not feed leaves
+    that mirror where it is, rather than rewriting a file the run was
+    not asked about.
+
+    :param build_requires: The configured mirrors, mapped to their sources.
+    :param selected_locks: The locks this invocation is about.
+    :param tox_root: The directory a relative source is resolved from.
+    :returns: The selected mirrors, each with its position and contents.
+    """
+    wanted = {
+        lock_input
+        for _, _, lock_inputs in selected_locks
+        for lock_input in lock_inputs
+    }
+    return [
+        (
+            mirror_index,
+            mirror_file,
+            _build_system_requires(tox_root, source),
+        )
+        for mirror_index, (mirror_file, source)
+        in enumerate(build_requires.items())
+        if mirror_file in wanted
+    ]
 
 
 def _split_option(option: str) -> _c.Iterator[str]:
@@ -1061,6 +1173,15 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         ),
     )
     core_conf.add_config(
+        'lock_build_requires',
+        of_type=dict[Path, Path],
+        default=dict(_DEFAULT_BUILD_REQUIRES),
+        desc=(
+            'the sources `tox-lock` writes from a `[build-system] requires` '
+            'table, each mapped to the metadata file declaring it'
+        ),
+    )
+    core_conf.add_config(
         'lock_file_options',
         of_type=dict[Path, list[str]],
         default=dict(_DEFAULT_LOCK_FILE_OPTIONS),
@@ -1096,7 +1217,35 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             f'lock they were meant for compiled without them.',
         )
 
+    # NOTE: A mirror no lock is compiled from is refused rather than
+    # NOTE: written anyway. What it would otherwise be is a file the
+    # NOTE: plugin keeps faithfully up to date and nothing ever reads --
+    # NOTE: a build backend the project believes is pinned, resolved
+    # NOTE: from the index on every machine, with a green
+    # NOTE: `lock-deps-check` over it.
+    build_requires = core_conf['lock_build_requires']
+    lock_inputs = {
+        lock_input
+        for lock_sources in lock_files.values()
+        for lock_input in lock_sources
+    }
+    unlocked = set(build_requires).difference(lock_inputs)
+    if unlocked:
+        raise HandledError(
+            f'`lock_build_requires` writes '
+            f'{", ".join(sorted(map(str, unlocked)))}, which `lock_files` '
+            f'compiles no lock from. It compiles from '
+            f'{", ".join(sorted(map(str, lock_inputs)))}. A mirror nothing '
+            f'is compiled from is a build backend the project believes is '
+            f'pinned and nothing installs from.',
+        )
+
     selected_locks = _selected_lock_files(lock_files, state)
+    selected_mirrors = _selected_build_requires(
+        build_requires,
+        selected_locks,
+        core_conf['tox_root'],
+    )
     pos_args = _lock_args(state)
     lock_summary = _lock_summary(core_conf, selected_locks, pos_args)
 
@@ -1113,7 +1262,19 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             ),
             labels=list(_LOCK_LABELS),
             deps=list(_LOCK_UV),
-            commands_pre=[],
+            # NOTE: Before the compiles rather than among them: a lock
+            # NOTE: is compiled out of the mirror, so a mirror written
+            # NOTE: afterwards would land a lock one run behind the
+            # NOTE: table it claims to pin.
+            commands_pre=[
+                _python_script_command(
+                    _BUILD_REQUIRES_SCRIPT,
+                    str(mirror_file),
+                    str(build_requires[mirror_file]),
+                    *requirements,
+                )
+                for _, mirror_file, requirements in selected_mirrors
+            ],
             commands=[
                 _compile_command(
                     core_conf,
@@ -1168,6 +1329,15 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
         scratch_root / str(lock_index) / lock_file.name
         for lock_index, lock_file, _ in selected_locks
     ]
+    # NOTE: Under a directory of their own rather than numbered
+    # NOTE: alongside the locks: the two sequences are indexed
+    # NOTE: independently, and a mirror and a lock sharing a position
+    # NOTE: would otherwise share a scratch file.
+    mirror_scratch_files = [
+        scratch_root / _BUILD_SYSTEM_TABLE / str(mirror_index)
+        / mirror_file.name
+        for mirror_index, mirror_file, _ in selected_mirrors
+    ]
     # NOTE: The check env takes `[testenv:lock-deps]` as its base so
     # NOTE: that a project pinning the resolver, naming an interpreter
     # NOTE: or passing a token writes it once, on the env it thinks of
@@ -1193,6 +1363,26 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
             ),
             labels=list(_CHECK_LABELS),
             commands_pre=[
+                # NOTE: Into the scratch tree, never over the committed
+                # NOTE: mirror: the check says whether the work tree is
+                # NOTE: current, and a check that fixed what it found
+                # NOTE: would report a clean tree on the second run and
+                # NOTE: leave an unreviewed edit behind on the first.
+                *(
+                    _python_script_command(
+                        _BUILD_REQUIRES_SCRIPT,
+                        str(mirror_scratch_file),
+                        str(build_requires[mirror_file]),
+                        *requirements,
+                    )
+                    for (_, mirror_file, requirements), mirror_scratch_file
+                    in zip(
+                        selected_mirrors,
+                        mirror_scratch_files,
+                        strict=True,
+                    )
+                ),
+                *(
                 _python_script_command(
                     _CHECK_SEED_SCRIPT,
                     str(lock_file),
@@ -1203,6 +1393,7 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                     scratch_files,
                     strict=True,
                 )
+                ),
             ],
             commands=[
                 *(
@@ -1216,8 +1407,22 @@ def tox_add_core_config(core_conf: ConfigSet, state: State) -> None:
                     for (_, lock_file, lock_inputs), scratch_file
                     in zip(selected_locks, scratch_files, strict=True)
                 ),
+                # NOTE: The mirrors are compared ahead of the locks
+                # NOTE: they feed, so that a report opens with the
+                # NOTE: reason rather than with a lock whose sources
+                # NOTE: are themselves out of date.
                 _python_script_command(
                     _CHECK_COMPARE_SCRIPT,
+                    *(
+                        str(path)
+                        for (_, mirror_file, _), mirror_scratch_file
+                        in zip(
+                            selected_mirrors,
+                            mirror_scratch_files,
+                            strict=True,
+                        )
+                        for path in (mirror_scratch_file, mirror_file)
+                    ),
                     *(
                         str(path)
                         for (_, lock_file, _), scratch_file
